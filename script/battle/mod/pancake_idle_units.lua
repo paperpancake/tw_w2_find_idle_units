@@ -39,7 +39,6 @@ end;
 --if it can't find the pause UI, it will assume the battle is not paused
 --is there a better way to do this?
 local function pancake_is_paused()
-
     local is_paused = false;
     --code for finding the pause button is taken from battle_ui_manager:highlight_time_controls
     local uic_pause = find_uicomponent(core:get_ui_root(), "radar_holder", "speed_buttons", "pause");
@@ -63,7 +62,6 @@ local function pancake_is_paused()
 end;
 
 local function pancake_esc_menu_is_visible()
-    
     local retval = false;
     local uic_esc_menu = find_uicomponent(core:get_ui_root(), "panel_manager", "esc_menu_battle");
     if uic_esc_menu then
@@ -78,18 +76,17 @@ end;
 --a slimmed down version of script_unit:new() (from lib_battle_script_unit)
 --it should mimic a script unit except that a mock_su won't have a unit controller
 --created to avoid errors from trying to create multiple unit controllers for the same unit
-local function pancake_create_mock_su(new_army, new_ref)
-		
+local function pancake_create_mock_su(new_army, new_ref, pancake_unit_key) --pancake added parameter
 	local new_unit = new_army:units():item(new_ref);
 	local unit_found = true;
 		
 	-- set up the script unit
 	local mock_su = {
-        bm = bm,
+        bm = bm, --pancake edited value
         name = "",
         alliance = nil,
         alliance_num = -1,
-        army = new_army,
+        army = new_army, --pancake edited value
         army_num = -1,
         unit = nil,
         uc = nil,
@@ -97,7 +94,8 @@ local function pancake_create_mock_su(new_army, new_ref)
         start_position = nil,
         start_bearing = nil,
         start_width = nil,
-        uic_ping_marker = false
+        uic_ping_marker = false,
+        pancake_unit_key = nil --pancake added value. This is used by my code if I'm worried a reference might have become stale
     };
     setmetatable(mock_su, script_unit); --give this mock_su all the methods of script_unit
                                         --note: you should never directly or indirectly call a method that requires a unit controller,
@@ -131,17 +129,20 @@ local function pancake_create_mock_su(new_army, new_ref)
 	end;
 	
 	mock_su.unit = new_unit;
-	--mock_su.uc = create_unitcontroller(new_army, new_unit); --removed to avoid errors from having multiple unit controllers
+    --mock_su.uc = create_unitcontroller(new_army, new_unit); --removed to avoid errors from having multiple unit controllers
 			
 	mock_su.start_position = new_unit:ordered_position();
 	mock_su.start_bearing = new_unit:bearing();
-	mock_su.start_width = new_unit:ordered_width();
+    mock_su.start_width = new_unit:ordered_width();
+    
+    mock_su.pancake_unit_key = pancake_unit_key; --pancake added code
 	
 	return mock_su;
 end;
 
 -- modified from lib_battle_script_unit's highlight_unit_card
 -- I'm also using this to filter for units that are under your control in multiplayer battles with gifted units
+-- This is also one way that I'm checking to see if a unit is still alive (if it's dead, references we have to it might be stale)
 local function pancake_find_unit_card(unit_key)
 	local uim = bm:get_battle_ui_manager();
 	
@@ -170,41 +171,55 @@ local function pancake_find_unit_card(unit_key)
     return nil;
 end;
 
---TODO: remove this if not using
-local function pancake_find_visible_unit_card(unit_key)
-    local uic_card = pancake_find_unit_card(unit_key);
-    if uic_card then
-        if uic_card:Visible() then
-            return uic_card;
+--if no unit_key is provided, this will use mock_su.pancake_unit_key
+local function pancake_safely_remove_any_ping_icon(mock_su, unit_key)
+    if mock_su then
+        if mock_su.uic_ping_marker then
+
+            if not unit_key then
+                unit_key = mock_su.pancake_unit_key;
+            end;
+
+            if unit_key then
+                --IMPORTANT: You need some way to tell if the uic_ping_marker is broken or stale
+                --           That can happen when a summoned unit dies, for example
+                --           Right now, seeing if the unit has a unit card seems to work for this.
+                if pancake_find_unit_card(unit_key) then
+                    mock_su:remove_ping_icon();
+                end;
+            else
+                pancake_out("Warning: pancake_safely_remove_any_ping_icon was called, but no unit_key could be found, even from the cache.");
+            end;
         end;
+    else
+        pancake_out("Warning: pancake_safely_remove_any_ping_icon was called, but no mock_su was provided.");
     end;
-    
-    return nil;
 end;
 
 --this relies on the idles cache from pancake_cache_idles()
 local function pancake_mark_idles_now()
-
     local sync_highlights_now = need_to_sync_highlights;
     need_to_sync_highlights = false;
     
     for unit_key, is_idle in next, idle_flags do
         local current_mock_su = idle_mock_sus[unit_key];
         if current_mock_su then
-            if is_idle and pancake_find_unit_card(unit_key) then
-                if not current_mock_su.uic_ping_marker then
-                    --TODO: if pings are removed, find another way to tell if the unit card is highlighted
-                    current_mock_su:highlight_unit_card(true);
-                    current_mock_su:add_ping_icon();
-                    if not sync_highlights_now then
-                        need_to_sync_highlights = true;
+            if pancake_find_unit_card(unit_key) then
+                if is_idle and pancake_find_unit_card(unit_key) then
+                    if not current_mock_su.uic_ping_marker then
+                        --TODO: if pings are removed in options, find another way to tell if the unit card is highlighted
+                        current_mock_su:highlight_unit_card(true);
+                        current_mock_su:add_ping_icon();
+                        if not sync_highlights_now then
+                            need_to_sync_highlights = true;
+                        end;
+                    elseif sync_highlights_now then
+                        current_mock_su:highlight_unit_card(true);
                     end;
-                elseif sync_highlights_now then
-                    current_mock_su:highlight_unit_card(true);
+                else
+                    current_mock_su:highlight_unit_card(false);
+                    pancake_safely_remove_any_ping_icon(current_mock_su, unit_key);
                 end;
-            else
-                current_mock_su:highlight_unit_card(false); --this also handles the case where the unit no longer has a unit card
-                current_mock_su:remove_ping_icon();
             end;
         end;
     end;
@@ -212,18 +227,18 @@ end;
 
 --clears all idle marks except any that are from an idle hotkey ping
 local function pancake_clear_idle_marks()
-    
     for unit_key, is_idle in next, idle_flags do
         local current_mock_su = idle_mock_sus[unit_key];
         if current_mock_su then
-            current_mock_su:highlight_unit_card(false); --this also handles the case where the unit no longer has a unit card
-            current_mock_su:remove_ping_icon();
+            if pancake_find_unit_card(unit_key) then
+                current_mock_su:highlight_unit_card(false); --this also handles the case where the unit no longer has a unit card
+                pancake_safely_remove_any_ping_icon(current_mock_su, unit_key);
+            end;
         end;
     end;
 end;
 
 local function pancake_cache_idles()
-    
     local player_units = player_army:units();
     
     pancake_fill_table(idle_flags, false);
@@ -250,7 +265,7 @@ local function pancake_cache_idles()
                     --things based on the name
 
                     --Note: script_unit:new() has been replaced by a mock script unit. See the comments for pancake_create_mock_su
-                    idle_mock_sus[unit_key] = pancake_create_mock_su(player_army, i);
+                    idle_mock_sus[unit_key] = pancake_create_mock_su(player_army, i, unit_key);
                 end;
                 found_an_idle = true;
             end;
@@ -410,29 +425,35 @@ local function pancake_pan_to_unit(unit_key)
     camera:look_at(new_target_pos, camera_duration, nil, is_linear);
 end;
 
+local function pancake_get_ping_removal_name(unit_key, unit_name)
+    return tostring(unit_key) .. "p" .. tostring(unit_name) .. "_remove_ping_icon";
+end;
+
 local function pancake_ping_unit_temporarily(unit_key)
     local mock_su_to_ping = idle_mock_sus[unit_key];
     local ping_duration = 600;
-    local ping_removal_function = function() mock_su_to_ping:remove_ping_icon(); end;
-    local ping_process_suffix = "_remove_ping_icon";
-    local ping_process_name = unit_key .. "p" .. mock_su_to_ping.name .. ping_process_suffix;
-    
+    local ping_removal_function = function()
+        pancake_safely_remove_any_ping_icon(mock_su_to_ping, unit_key);
+    end;
+
+    local ping_removal_name = pancake_get_ping_removal_name(unit_key, mock_su_to_ping.name);
+
     if not is_marking_idle_units then
         if not mock_su_to_ping.uic_ping_marker then
             --this doesn't use the optional ping duration from add_ping_icon because we need more control of repeated pings
             mock_su_to_ping:add_ping_icon();
-            bm:callback(ping_removal_function, ping_duration, ping_process_name);
+            bm:callback(ping_removal_function, ping_duration, ping_removal_name);
         else
-            bm:remove_process(ping_process_name);
-            bm:callback(ping_removal_function, ping_duration, ping_process_name);
+            bm:remove_process(ping_removal_name);
+            bm:callback(ping_removal_function, ping_duration, ping_removal_name);
         end;
         
         --remove the previous selection ping (especially helpful if the game is paused)
         if last_selected_idle then
             local prev_mock_su = idle_mock_sus[last_selected_idle];
             if prev_mock_su.uic_ping_marker then
-                bm:remove_process(prev_mock_su.name .. ping_process_suffix);
-                prev_mock_su:remove_ping_icon();
+                bm:remove_process(pancake_get_ping_removal_name(last_selected_idle, prev_mock_su.name));
+                pancake_safely_remove_any_ping_icon(prev_mock_su, prev_mock_su.pancake_unit_key);
             end;
         end;
     end;
@@ -448,7 +469,7 @@ local function pancake_helper_for_next_idle(unit_key)
             pancake_pan_to_unit(unit_key);
         end;
         pancake_ping_unit_temporarily(unit_key);
-        last_selected_idle = unit_key; --this needs to be set *after* (or at the end of) pancake_helper_for_next_idle()j
+        last_selected_idle = unit_key; --this needs to be set *after* (or at the end of) pancake_helper_for_next_idle()
         return true;
     else
         return false;
@@ -456,7 +477,6 @@ local function pancake_helper_for_next_idle(unit_key)
 end;
 
 local function pancake_select_next_idle()
-    
     if not pancake_esc_menu_is_visible() then
     
         local found_idle = false;
@@ -501,7 +521,6 @@ local function pancake_advisor_dismiss()
 end;
 
 local function pancake_show_ui_toggle(advice_str)
-    
     effect.advice(advice_str);
     pancake_advisor_open = true;
     
@@ -560,7 +579,6 @@ core:add_listener(
         return context.string == "camera_bookmark_save9"; -- save9 appears in the game as Save10
     end,
     function()
-        pancake_out("Toggle Idle Unit Cards");
         pancake_set_should_find_idle_units(not is_marking_idle_units);
     end,
     true
@@ -573,7 +591,6 @@ core:add_listener(
         return context.string == "camera_bookmark_save10"; -- save10 appears in the game as Save11
     end,
     function()
-        pancake_out("Pan to Next Idle Unit");
         if is_deployed then
             pancake_select_next_idle();
         else
