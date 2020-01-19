@@ -1,15 +1,17 @@
 -- Script author: Andrew Draper (paperpancake/paperpancake5)
 
+local function pancake_out(msg)
+    out("&&& paperpancake's Find Idle Units mod: "..msg);
+end;
+
 local bm = get_bm();
 
 local pancake_is_multiplayer = false;
 
-local player_army = bm:get_player_army();
---local enemy_alliance = bm:get_non_player_alliance();
-
 local is_marking_idle_units = false;
 local idle_cache_has_entry = true;
 local is_deployed = false;
+local is_battle_complete = false;
 
 local pancake_advisor_open = false;
 local need_to_sync_highlights = false;
@@ -27,38 +29,33 @@ local last_selected_idle = nil; --this stores the unit_key, not the unit or the 
 local idle_flags = {};
 local idle_mock_sus = {}; --As an abbreviation for script_unit, I prefer su over sunit here because sunit and unit look similar in this code
 
-local function pancake_out(msg)
-    out("&&& paperpancake's Find Idle Units mod: "..msg);
+local function pancake_show_ui_toggle(advice_str)
+    effect.advice(advice_str);
+    pancake_advisor_open = true;
+    
+    if not pancake_advisor_open then
+        core:add_listener(
+            "pancake_advice_listener",
+            "ComponentLClickUp", 
+            function(context) return context.string == __advisor_progress_button_name end,
+            function(context) pancake_advisor_open = false; end, 
+            false --listener should not persist after being triggered
+        );
+    end;
+
+    
+    local pancake_advisor_dismiss = function()
+        if pancake_advisor_open then
+            bm:close_advisor();
+        end;
+    end;
+    
+    bm:remove_process("pancake_advisor_dismiss");
+    bm:callback(pancake_advisor_dismiss, 1700, "pancake_advisor_dismiss");
 end;
 
 local function pancake_fill_table(given_list, fill_value)
     for key in next, given_list do rawset(given_list, key, fill_value) end;
-end;
-
---test to see if the game is paused
---if it can't find the pause UI, it will assume the battle is not paused
---is there a better way to do this?
-local function pancake_is_paused()
-    local is_paused = false;
-    --code for finding the pause button is taken from battle_ui_manager:highlight_time_controls
-    local uic_pause = find_uicomponent(core:get_ui_root(), "radar_holder", "speed_buttons", "pause");
-    
-    if not uic_pause then
-        pancake_out("Looking for pause button in another place");
-        uic_pause = find_uicomponent(core:get_ui_root(), "layout", "radar_holder", "speed_buttons", "pause");
-    end;
-    
-    
-    if uic_pause then
-        local pause_button_state = tostring(uic_pause:CurrentState());
-        if pause_button_state ~= nil then
-            is_paused = pause_button_state:lower():find("selected");
-        end;
-    else
-        pancake_out("Couldn't find pause button");
-    end;
-    
-    return is_paused;
 end;
 
 local function pancake_esc_menu_is_visible()
@@ -75,7 +72,8 @@ end;
 
 --a slimmed down version of script_unit:new() (from lib_battle_script_unit)
 --it should mimic a script unit except that a mock_su won't have a unit controller
---created to avoid errors from trying to create multiple unit controllers for the same unit
+--I'm not certain that it's necessary to mock script_units like this; I originally
+--created to avoid an error I was getting from trying to create multiple unit controllers for multiplayer gifted Bretonnians in lance formation
 local function pancake_create_mock_su(new_army, new_ref, pancake_unit_key) --pancake added parameter
 	local new_unit = new_army:units():item(new_ref);
 	local unit_found = true;
@@ -102,7 +100,7 @@ local function pancake_create_mock_su(new_army, new_ref, pancake_unit_key) --pan
                                         --since this mock_su won't have a unit controller
 	
 	script_unit.__index = script_unit;
-	script_unit.__tostring = function() return TYPE_SCRIPT_UNIT end; --TODO: is this ok?
+	script_unit.__tostring = function() return TYPE_SCRIPT_UNIT end;
 		
 	-- work out which alliance and army this unit is in
     local alliances = bm:alliances();
@@ -172,27 +170,29 @@ local function pancake_find_unit_card(unit_key)
 end;
 
 --if no unit_key is provided, this will use mock_su.pancake_unit_key
-local function pancake_safely_remove_any_ping_icon(mock_su, unit_key)
-    if mock_su then
-        if mock_su.uic_ping_marker then
+local function pancake_safely_remove_pancake_pings(mock_su, unit_key)
+    if not is_battle_complete then
+        if mock_su then
+            if mock_su.uic_ping_marker and is_uicomponent(mock_su.uic_ping_marker) then
 
-            if not unit_key then
-                unit_key = mock_su.pancake_unit_key;
-            end;
-
-            if unit_key then
-                --IMPORTANT: You need some way to tell if the uic_ping_marker is broken or stale
-                --           That can happen when a summoned unit dies, for example
-                --           Right now, seeing if the unit has a unit card seems to work for this.
-                if pancake_find_unit_card(unit_key) then
-                    mock_su:remove_ping_icon();
+                if not unit_key then
+                    unit_key = mock_su.pancake_unit_key;
                 end;
-            else
-                pancake_out("Warning: pancake_safely_remove_any_ping_icon was called, but no unit_key could be found, even from the cache.");
+
+                if unit_key then
+                    --IMPORTANT: You need some way to tell if the uic_ping_marker is broken or stale
+                    --           That can happen when a summoned unit dies, for example
+                    --           Right now, seeing if the unit has a unit card seems to work for this.
+                    if pancake_find_unit_card(unit_key) then
+                        mock_su:remove_ping_icon();
+                    end;
+                else
+                    pancake_out("Warning: pancake_safely_remove_pancake_pings was called, but no unit_key or cached unit_key could be found.");
+                end;
             end;
+        else
+            pancake_out("Warning: pancake_safely_remove_pancake_pings was called, but no mock_su was provided.");
         end;
-    else
-        pancake_out("Warning: pancake_safely_remove_any_ping_icon was called, but no mock_su was provided.");
     end;
 end;
 
@@ -205,9 +205,9 @@ local function pancake_mark_idles_now()
         local current_mock_su = idle_mock_sus[unit_key];
         if current_mock_su then
             if pancake_find_unit_card(unit_key) then
-                if is_idle and pancake_find_unit_card(unit_key) then
+                if is_idle then
                     if not current_mock_su.uic_ping_marker then
-                        --TODO: if pings are removed in options, find another way to tell if the unit card is highlighted
+                        --TODO: if future config options opt out of pings, find another way to tell if the unit card is highlighted
                         current_mock_su:highlight_unit_card(true);
                         current_mock_su:add_ping_icon();
                         if not sync_highlights_now then
@@ -218,7 +218,7 @@ local function pancake_mark_idles_now()
                     end;
                 else
                     current_mock_su:highlight_unit_card(false);
-                    pancake_safely_remove_any_ping_icon(current_mock_su, unit_key);
+                    pancake_safely_remove_pancake_pings(current_mock_su, unit_key);
                 end;
             end;
         end;
@@ -232,44 +232,52 @@ local function pancake_clear_idle_marks()
         if current_mock_su then
             if pancake_find_unit_card(unit_key) then
                 current_mock_su:highlight_unit_card(false); --this also handles the case where the unit no longer has a unit card
-                pancake_safely_remove_any_ping_icon(current_mock_su, unit_key);
+                pancake_safely_remove_pancake_pings(current_mock_su, unit_key);
+            end;
+        end;
+    end;
+end;
+
+--this should only cache idle units for the indicated army if those units are controlled by the local player
+local function pancake_cache_idles_for_army(army_to_cache)
+    local army_units = army_to_cache:units();
+    
+    for i = 1, army_units:count() do
+        local current_unit = army_units:item(i);
+        if current_unit then
+            local unit_key = current_unit:unique_ui_id();
+
+            if pancake_find_unit_card(unit_key) then --this should filter out units controlled by other players (gifted in coop for example)
+                if current_unit:is_idle() then
+                    idle_flags[unit_key] = true;
+                    if idle_mock_sus[unit_key] == nil then
+                        --this handles all units, including reinforcements and summons
+
+                        --We can't use current_unit:name() as the new_ref if we want this to work with generated battles
+                        --That's because in lib_battle_manager, it says:
+                        --  "we are currently using the scriptunit name to determine the
+                        --  army script name - this might change in future"
+                        --So all the units can have names like "1:1:player_army", which confuses script_unit:new(...),
+                        --since it relies on units:item(new_ref) to find the right unit, and unite:item() can find
+                        --things based on the name
+
+                        --Note: script_unit:new() has been replaced by a mock script unit. See the comments for pancake_create_mock_su
+                        idle_mock_sus[unit_key] = pancake_create_mock_su(army_to_cache, i, unit_key);
+                    end;
+                end;
             end;
         end;
     end;
 end;
 
 local function pancake_cache_idles()
-    local player_units = player_army:units();
-    
+
     pancake_fill_table(idle_flags, false);
 
-    local found_an_idle = false;
-    for i = 1, player_units:count() do
-        local current_unit = player_units:item(i);
-        if current_unit then
-            local unit_key = current_unit:unique_ui_id();
+    local all_armies_in_alliance = bm:get_player_alliance():armies();
 
-            if current_unit:is_idle() then
-                idle_flags[unit_key] = true;
-                if idle_mock_sus[unit_key] == nil then
-                    --this handles all units, including reinforcements and summons
-                    --by the time we create a script unit for a unit, it's part of the
-                    --player_army, so no need to check which army they're in
-
-                    --We can't use current_unit:name() as the new_ref if we want this to work with generated battles
-                    --That's because in lib_battle_manager, it says:
-                    --  "we are currently using the scriptunit name to determine the
-                    --  army script name - this might change in future"
-                    --So all the units can have names like "1:1:player_army", which confuses script_unit:new(...),
-                    --since it relies on units:item(new_ref) to find the right unit, and unite:item() can find
-                    --things based on the name
-
-                    --Note: script_unit:new() has been replaced by a mock script unit. See the comments for pancake_create_mock_su
-                    idle_mock_sus[unit_key] = pancake_create_mock_su(player_army, i, unit_key);
-                end;
-                found_an_idle = true;
-            end;
-        end;
+    for i = 1, all_armies_in_alliance:count() do
+        pancake_cache_idles_for_army(all_armies_in_alliance:item(i));
     end;
     
     if is_marking_idle_units then
@@ -277,152 +285,23 @@ local function pancake_cache_idles()
     end;
 end;
 
-local function pancake_select_unit(unit_key)
-    local uic_card = pancake_find_unit_card(unit_key);
+local function pancake_select_unit(uic_card, also_pan_camera)
     if uic_card then
-        --Currently, this works even if the unit is already selected, without clearing
-        --the current selection. I haven't tested for clearing a selection, yet, but perhaps you could
-        --do something like this? core:get_ui_root():SimulateLClick();
-        --Or use :CurrentState() to get the state string and look for a substring of selected (ignoring case)
-        uic_card:SimulateLClick(); --simulating a double-click would be better, but I'm not sure how to do that
-    end;
-end;
 
-local function pancake_calc_normalized(vector)
-    
-    if vector then
-        local len = vector:length();
-        if len > 0 then
-            local x = vector:get_x();
-            local y = vector:get_y();
-            local z = vector:get_z();
-            return v(x/len, y/len, z/len);
+        local was_visible = uic_card:Visible();
+
+        if not was_visible then
+            uic_card:SetVisible(true);
+        end;
+        if also_pan_camera then
+            uic_card:SimulateDblLClick();
+        else
+            uic_card:SimulateLClick();
+        end;
+        if not was_visible then
+            uic_card:SetVisible(false);
         end;
     end;
-    
-    pancake_out("Returning default vector."); 
-    return v(1, 0, 0);
-end;
-
-local function pancake_calc_v_difference(vTo, vFrom)
-    return v(vTo:get_x() - vFrom:get_x(), vTo:get_y() - vFrom:get_y(), vTo:get_z() - vFrom:get_z());
-end;
-
---find the pitch from the vector (y is the vertical axis)
-local function pancake_calc_pitch(vector)
-    local v_len = vector:length();
-    if v_len == 0 then
-        return 0;
-    else
-        return math.acos(vector:get_y() / v_len);
-    end;
-end;
-
---a poor approximation of the camera's current height above the ground. It relys on units to give nearby ground height.
-local function pancake_bad_approx_camera_height()
-    local min_return_val = 0.5;
-    local bad_approx_camera_height = min_return_val;
-    local camera = bm:camera();
-    local camera_position;
-    if camera then
-        camera_position = camera:position();
-    else
-        --this case should not be reached, but it's here to prevent unforseen errors
-        pancake_out("Camera not found! Returning min height");
-        return min_return_val;
-    end;
-    local nearest_position;
-    local shortest_distance = 99999;
-    local max_units_to_check = 40;
-					
-    local alliances = bm:alliances();
-    
-    --This is currently just checking the main army for the player and the enemy, not any secondary armies 
-    --Also, the functions alliances:count(), armies:count(), etc, aren't working here for some reason
-    --This is getting around that by using pcall() to try to get each unit, and breaking out of the loop if it fails
-    --I'm hoping I'll find a more direct way to get this information without relying on units to give me the ground's position.
-    if alliances then
-        for i = 1, 2 do
-            local units_to_check = alliances:item(i):armies():item(1):units();
-            if units_to_check then
-                for j = 1, max_units_to_check do
-                    local has_unit;
-                    local tmp_position;
-                    has_unit, tmp_position = pcall(function() return units_to_check:item(j):position(); end);
-
-                    if not has_unit then
-                        break; --we've likely reached the end of the unit list
-                    end;
-
-                    local tmp_dist = camera_position:distance(tmp_position);
-                    
-                    if tmp_dist < shortest_distance then
-                        nearest_position = tmp_position;
-                        shortest_distance = tmp_dist;
-                    end;
-                end;
-            end;
-        end;
-    end;
-    
-    if nearest_position ~= nil then
-        bad_approx_camera_height = camera_position:get_y() - nearest_position:get_y();
-    end;
-    
-    if bad_approx_camera_height < min_return_val then
-        bad_approx_camera_height = min_return_val;
-    end;
-    
-    return bad_approx_camera_height;
-end;
-
---I haven't figured out how to access the built-in panning functions, so I
---made my own for now. I'd prefer to replace this with CA's panning for consistency.
---If I can't use CA's, then I'd like to figure out how to tell the camera's distance above the ground
---for better situational camera control.
-local function pancake_pan_to_unit(unit_key)
-    local unit_to_pan = idle_mock_sus[unit_key].unit;
-    if not unit_to_pan then
-        return;
-    end;
-    
-    local pos_unit = unit_to_pan:position();
-    local camera = bm:camera();
-    if not camera then
-        return;
-    end;
-    
-    local old_direction = pancake_calc_v_difference(camera:target(), camera:position());
-    local cam_horizontal = v(old_direction:get_x(), 0, old_direction:get_z());
-    cam_horizontal = pancake_calc_normalized(cam_horizontal);
-    local desired_pitch = pancake_calc_pitch(old_direction);
-    local look_ahead = 0.5;
-    local low_angle = 1.75; --about 100 degrees
-    
-    if desired_pitch >= low_angle then
-        local approx_camera_height = pancake_bad_approx_camera_height();
-        --Dividing by around 2.38 would be better than 2.6, but I'm being a bit conservative
-        --in case approx_camera_height is off.
-        look_ahead = look_ahead + (approx_camera_height/2.6 * math.tan(math.pi - desired_pitch));
-    elseif desired_pitch < math.pi/2 then --the camera is looking up
-        --camera:look_at() will handle pointing the camera back down, but we need to handle the look_ahead target
-        --be conservative when looking ahead unless you are going to control the new look angle
-        --Though not ideal, it's better to have the unit centered in the screen than to be looking too far ahead of it.
-        local approx_camera_height = pancake_bad_approx_camera_height();
-        local tmp_tan = 1.7; -- math.tan(math.pi - 1.7), which corresponds to a desired_pitch of 120 degrees
-        look_ahead = look_ahead + (approx_camera_height/2.6 * tmp_tan);
-    end;
-    
-    local new_target_pos = v_offset(pos_unit, look_ahead * cam_horizontal:get_x(), 0, look_ahead * cam_horizontal:get_z());
-    
-    local camera_duration = 0;
-    local is_linear = true;
-    
-    if not pancake_is_paused() then
-        camera_duration = 0.3; --use a smoother camera transition
-        is_linear = false;
-    end;
-    camera:look_at(new_target_pos, camera_duration, nil, is_linear);
 end;
 
 local function pancake_get_ping_removal_name(unit_key, unit_name)
@@ -433,7 +312,7 @@ local function pancake_ping_unit_temporarily(unit_key)
     local mock_su_to_ping = idle_mock_sus[unit_key];
     local ping_duration = 600;
     local ping_removal_function = function()
-        pancake_safely_remove_any_ping_icon(mock_su_to_ping, unit_key);
+        pancake_safely_remove_pancake_pings(mock_su_to_ping, unit_key);
     end;
 
     local ping_removal_name = pancake_get_ping_removal_name(unit_key, mock_su_to_ping.name);
@@ -453,7 +332,7 @@ local function pancake_ping_unit_temporarily(unit_key)
             local prev_mock_su = idle_mock_sus[last_selected_idle];
             if prev_mock_su.uic_ping_marker then
                 bm:remove_process(pancake_get_ping_removal_name(last_selected_idle, prev_mock_su.name));
-                pancake_safely_remove_any_ping_icon(prev_mock_su, prev_mock_su.pancake_unit_key);
+                pancake_safely_remove_pancake_pings(prev_mock_su, prev_mock_su.pancake_unit_key);
             end;
         end;
     end;
@@ -462,12 +341,9 @@ end;
 --only acts if the unit has a unit card
 --returns true if actions were performed for the unit, false otherwise
 local function pancake_helper_for_next_idle(unit_key)
-    local unit_card = pancake_find_unit_card(unit_key);
-    if unit_card then
-        pancake_select_unit(unit_key);
-        if not pancake_is_multiplayer then
-            pancake_pan_to_unit(unit_key);
-        end;
+    local uic_card = pancake_find_unit_card(unit_key);
+    if uic_card then
+        pancake_select_unit(uic_card, true); --uic_card, not unit_key
         pancake_ping_unit_temporarily(unit_key);
         last_selected_idle = unit_key; --this needs to be set *after* (or at the end of) pancake_helper_for_next_idle()
         return true;
@@ -514,50 +390,28 @@ local function pancake_select_next_idle()
     end;
 end;
 
-local function pancake_advisor_dismiss()
-    if pancake_advisor_open then
-        bm:close_advisor();
-    end;
-end;
-
-local function pancake_show_ui_toggle(advice_str)
-    effect.advice(advice_str);
-    pancake_advisor_open = true;
-    
-    if not pancake_advisor_open then
-        core:add_listener(
-            "pancake_advice_listener",
-            "ComponentLClickUp", 
-            function(context) return context.string == __advisor_progress_button_name end,
-            function(context) pancake_advisor_open = false; end, 
-            false --listener should not persist after being triggered
-        );
-    end;
-    
-    bm:remove_process("pancake_advisor_dismiss");
-    bm:callback(pancake_advisor_dismiss, 1700, "pancake_advisor_dismiss");
-end;
-
 local function pancake_set_should_find_idle_units(bool_val)
-    is_marking_idle_units = bool_val;
-    local advice_str = "Find Idle Units is ";
-    if bool_val then
-        advice_str = advice_str .. "ON";
-    else
-        advice_str = advice_str .. "OFF";
-    end;
-    
-    if is_deployed then
-        
+    if not is_battle_complete then
+        is_marking_idle_units = bool_val;
+        local advice_str = "Find Idle Units is ";
         if bool_val then
-            pancake_mark_idles_now();
+            advice_str = advice_str .. "ON";
         else
-            pancake_clear_idle_marks();
-            --note: this deliberately does not stop the repeat_callback from running, so the idle_mock_sus table stays updated
+            advice_str = advice_str .. "OFF";
         end;
+        
+        if is_deployed then
+            
+            if bool_val then
+                pancake_mark_idles_now();
+            else
+                pancake_clear_idle_marks();
+                --note: this deliberately does not stop the repeat_callback from running, so the idle_mock_sus table stays updated
+            end;
+        end;
+        
+        pancake_show_ui_toggle(advice_str);
     end;
-    
-    pancake_show_ui_toggle(advice_str);
 end;
 
 local function pancake_phase_deployed()
@@ -570,6 +424,11 @@ local function pancake_phase_deployed()
     --of the battle instead of off,
     --then delete the -- at the start of the next line
     --pancake_set_should_find_idle_units(true);
+end;
+
+local function pancake_phase_complete()
+    is_deployed = false;
+    is_battle_complete = true;
 end;
 
 core:add_listener(
@@ -591,10 +450,12 @@ core:add_listener(
         return context.string == "camera_bookmark_save10"; -- save10 appears in the game as Save11
     end,
     function()
-        if is_deployed then
-            pancake_select_next_idle();
-        else
-            pancake_show_ui_toggle("Next idle is not enabled until the battle has started.");
+        if not is_battle_complete then
+            if is_deployed then
+                pancake_select_next_idle();
+            else
+                pancake_show_ui_toggle("Next idle is not enabled until the battle has started.");
+            end;
         end;
     end,
     true
@@ -622,3 +483,4 @@ core:add_listener(
 );
 
 bm:register_phase_change_callback("Deployed", pancake_phase_deployed);
+bm:register_phase_change_callback("Complete", pancake_phase_complete);
