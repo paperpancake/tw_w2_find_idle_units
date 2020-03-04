@@ -268,7 +268,7 @@ function pancake:clear_last_temporary_ping(should_check_idle_first)
                 --make sure it's still safe to reference the is_idle() function
                 if not is_routing_or_dead(prev_mock_su, true) then
                     should_clear = true;
-                    if find_unit_card(self.last_selected_idle) then
+                    if self:find_unit_card(self.last_selected_idle) then --pancake edit 3/3/2020
                         should_clear = not prev_mock_su.unit:is_idle();
                     end;
                 end;
