@@ -1,10 +1,5 @@
 -- Script author: Andrew Draper (paperpancake/paperpancake5)
 
-require("script/pancake_lib/pancake_config_loader");
-require("script/battle/mod/pancake_battle_lib/pancake_mock_script_unit");
-require("script/battle/mod/pancake_battle_lib/pancake_battle_ui_handler");
---there could be another require() below depending on the configuration
-
 -------------------------------------------------------------------------------------------------------------------------------
 --- @section declarations
 -------------------------------------------------------------------------------------------------------------------------------
@@ -23,6 +18,12 @@ require("script/battle/mod/pancake_battle_lib/pancake_battle_ui_handler");
 local bm = get_bm();
 local config;
 local config_log_msg;
+
+--Since The Warden & The Paunch update, these require calls need to be below get_bm() for some reason
+require("pancake_mock_script_unit");
+require("pancake_battle_ui_handler");
+require("script/pancake_lib/pancake_config_loader");
+--there could be another require() below depending on the configuration
 
 if not is_function(toboolean) then
     --defined for readability
@@ -204,21 +205,21 @@ do
 
     --both the callback_key (string) and the callback (function) are required
     --the order that the listeners will be called in is not guaranteed
-    function bm:pancake_set_listener_for_selections(callback_key, callback)
+    function bm:pancake_idle_set_listener_for_selections(callback_key, callback)
         if not (callback_key and is_string(callback_key) and callback and is_function(callback)) then
             pancake.out("Bad arguments provided to bm:pancake_add_listener_for_battle_commands");
             return;
         end;
 
-        if not self.pancake_listeners_for_selections then
-            self.pancake_listeners_for_selections = {};
+        if not self.pancake_idle_listeners_for_selections then
+            self.pancake_idle_listeners_for_selections = {};
         end;
 
-        self.pancake_listeners_for_selections[callback_key] = callback;
+        self.pancake_idle_listeners_for_selections[callback_key] = callback;
     end;
 
-    function bm:pancake_clear_listeners_for_selections()
-        self.pancake_listeners_for_selections = nil;
+    function bm:pancake_idle_clear_listeners_for_selections()
+        self.pancake_idle_listeners_for_selections = nil;
     end;
 
     --overrides the old, global function
@@ -227,13 +228,13 @@ do
 
         --note that this is a function, not a method; you can't use the self variable here
 
-        if bm.pancake_listeners_for_selections then
-            for k, pancake_callback in next, bm.pancake_listeners_for_selections do
+        if bm.pancake_idle_listeners_for_selections then
+            for k, pancake_callback in next, bm.pancake_idle_listeners_for_selections do
                 pancake_callback(unit, is_selected);
             end;
         end;
 
-        original_battle_manager_unit_selection_handler(unit, selected);
+        original_battle_manager_unit_selection_handler(unit, is_selected);
     end;
 end;
 
@@ -250,6 +251,17 @@ do
     config = {};
     config.popup_msg_duration = 1.3;
     config.no_ping_icon_for_next_unit = true; --changed to true in 05/2020 update
+
+    --This should save some users that might forget to put quotation marks around some strings like "script_F2"
+    config.script_F2 = "script_F2"
+    config.script_F3 = "script_F3"
+    config.script_F4 = "script_F4"
+    config.script_shift_F2 = "script_shift_F2"
+    config.script_shift_F3 = "script_shift_F3"
+    config.script_shift_F4 = "script_shift_F4"
+    config.script_ctrl_F2 = "script_ctrl_F2"
+    config.script_ctrl_F3 = "script_ctrl_F3"
+    config.script_ctrl_F4 = "script_ctrl_F4"
 
     success, file_found, msg, config = pancake_config_loader.load_file("./mod_config/find_idle_units_config.txt", config);
 
@@ -287,7 +299,7 @@ do
 end;
 
 if config.add_button_to_exclude_unit then
-    require("script/battle/mod/pancake_battle_lib/battlemod_button_ext");
+    require("battlemod_button_ext");
 end;
 
 -------------------------------------------------------------------------------------------------------------------------------
@@ -609,13 +621,19 @@ end;
 --returns true if actions were performed for the unit, false otherwise
 function pancake:helper_for_next_idle(unit_key)
 
+    self:debug("In helper_for_next_idle");
+
     local uic_card = self:find_unit_card(unit_key);
     if uic_card then
         self:select_unit(uic_card, true); --uic_card, not unit_key
+        self:debug("After select_unit");
         self:ping_unit_if_ok(unit_key, false);
         self.last_selected_idle = unit_key; --this needs to be set *after* (or at the end of) pancake:helper_for_next_idle()
+        self:debug("End helper_for_next_idle with true")
         return true;
     end;
+
+    self:debug("End helper_for_next_idle with false")
 
     return false;
 end;
@@ -721,6 +739,7 @@ end;
 
 --is_callback_context is an optional parameter that moves the execution to a callback context
 function pancake:select_next_idle(is_callback_context)
+
     if not self.esc_menu_is_visible() then
 
         if not is_callback_context then
@@ -732,6 +751,8 @@ function pancake:select_next_idle(is_callback_context)
         self:debug("In select_next_idle");
 
         self:update_idles();
+
+        self:debug("After updating idles");
     
         local found_idle = false;
         local loop_around_to_beginning = (self.last_selected_idle ~= nil);
@@ -887,8 +908,8 @@ function pancake:phase_startup()
             self:update_exclusion_button_state();
         end;
 
-        bm:pancake_set_listener_for_selections(
-            "pancake:respond_to_unit_selections",
+        bm:pancake_idle_set_listener_for_selections(
+            "find_idle_respond_to_selections",
             function(unit, is_selected)
                 self:respond_to_unit_selections();
             end
@@ -1297,7 +1318,7 @@ function pancake:phase_complete()
     bm:remove_process("pancake:auto_start_toggle");
 
     bm:pancake_clear_listeners_for_battle_commands();
-    bm:pancake_clear_listeners_for_selections();
+    bm:pancake_idle_clear_listeners_for_selections();
 end;
 
 core:add_listener(
@@ -1321,6 +1342,7 @@ core:add_listener(
     end,
     function()
         local pancake_object = pancake;
+        --pancake_object:debug("In camera_bookmark_save10 for find_next_idle");
         if not pancake_object.is_battle_complete then
             if pancake_object.is_deployed then
                 pancake_object:select_next_idle(false);
