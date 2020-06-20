@@ -52,8 +52,16 @@ exclude_spellcasters_by_default = false     -- this was added in 05/2020
 -- The following don't do anything unless at least one of the exclude options is true
 
 include_again_if_new_spell = false
-include_again_if_mana_is_at_least = 25
+include_again_if_mana_is_at_least = 99
 include_again_if_gates_break = false
+
+----------------------------------------------------------------------------------------------
+-- To reduce false positives, this mod waits until a unit is idle for
+-- at least seconds_idle_before_marked before marking it or including it in the
+-- next idle unit hotkey.
+
+seconds_idle_before_marked = 1.8
+seconds_between_idle_checks = 0.6
 
 ]]
 
@@ -82,9 +90,24 @@ exclude_spellcasters_by_default = false
 
 ]]
 
+local pancake_2020_06_update_text =
+[[
+----------------------------------------------------------------------------------------------
+--        ******* New for 06/2020 *********
+----------------------------------------------------------------------------------------------
+
+-- To reduce false positives, this mod now waits until a unit is idle for
+-- at least seconds_idle_before_marked before marking it or including it in the
+-- next idle unit hotkey.
+
+seconds_idle_before_marked = 1.8
+seconds_between_idle_checks = 0.6
+
+]]
+
 local config_filename = "./mod_config/find_idle_units_config.txt";
 
---@param a config table that contains the variables and values in the 
+--@param a config table that reflects the current environmnet state (variables and their values) that are in the config file
 local function pancake_update_config_file_if_needed(config)
 
     --update for May 2020
@@ -95,6 +118,20 @@ local function pancake_update_config_file_if_needed(config)
             file:write(pancake_2020_05_update_text);
             file:close();
             out("&&&& added the 05/2020 update to the end of "..tostring(config_filename));
+        else
+            out("&&&& Could not update the config file at "..tostring(config_filename));
+            out("&&&& "..tostring(err_str));
+        end;
+    end;
+
+    --update for May 2020
+    if config.seconds_idle_before_marked == nil and config.seconds_between_idle_checks == nil then
+        local file, err_str = io.open(config_filename, "a");
+        if file then
+            file:write("");
+            file:write(pancake_2020_06_update_text);
+            file:close();
+            out("&&&& added the 06/2020 update to the end of "..tostring(config_filename));
         else
             out("&&&& Could not update the config file at "..tostring(config_filename));
             out("&&&& "..tostring(err_str));

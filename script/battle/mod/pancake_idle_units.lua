@@ -5,7 +5,7 @@
 -------------------------------------------------------------------------------------------------------------------------------
 
 --In this script file, a "unit_key" is very important as a unique identifier for a unit
---unit_keys are used as an index for idle_flags and map_key_to_mock_sus, among other things
+--unit_keys are used as an index for idle_timestamps and map_key_to_mock_sus, among other things
 --Currently, I'm using a unit's unique_ui_id as the unit_key, but I recommend doing
 --CTRL+F for "local unit_key = " to see what property of a unit is used in case I forget to update this comment
 --We can't use current_unit:name() as a unique identifier if we want this to work with generated battles
@@ -41,10 +41,11 @@ local pancake = {
     last_selected_idle = nil, --this stores the unit_key, not the unit or the su, of the last selected using this mod's hotkey
     needs_update_after_command = false; --was there a command given to units that requires idles be updated? (Used when the game is paused)
 
-    --idle_flags and map_key_to_mock_sus are indexed by unit_keys
+    --idle_timestamps and map_key_to_mock_sus are indexed by unit_keys
     --These tables may have entries for units no longer in the army's unit list (that's ok)
     --for example: a unit is idle at some point in a battle, and then that unit withdraws from the battle
-    idle_flags = {},    --idle_flags[unit_key] == true if the unit is idle (and not in the exclusion_map)
+    --idle_timestamps[unit_key] == timestamp_tick when it the unit was first marked as idle (and not in the exclusion_map), or false otherwise (not nil, since we need to know whether to clear existing marks)
+    idle_timestamps = {},
     map_key_to_mock_sus = {}, --map_key_to_mock_sus[unit_key] == the mock_su for the unit that has the given unit key
                         --As an abbreviation for script_unit, I prefer su over sunit here because sunit and unit look similar in this code
 
@@ -59,6 +60,12 @@ local pancake = {
     --the command name is stored as a key, with the value set to true, for faster lookup
     --see https://stackoverflow.com/a/2282547/1019330
     irrelevant_commands = {},
+
+    --to have the Next Idle hotkey work while respecting config.seconds_idle_before_marked
+    --we need the mod to keep checking idle status even when it isn't marking the idles
+    --this variable might be changed to false if config.seconds_idle_before_marked is 0 or false 
+    keep_checking_in_background = true,
+    has_callback_for_updating_idles = false,
 
     listen_for_destroyed_gates = false,
 
@@ -136,7 +143,7 @@ end;
 
 -------------------------------------------------------------------------------------------------------------------------------
 --- @section Extend the battle_manager's functionality
---- @desc This will allow me to more easily listen for any battle command
+--- @desc This will allow me to more easily listen for any battle commands or selection changes
 -------------------------------------------------------------------------------------------------------------------------------
 
 do
@@ -252,6 +259,9 @@ do
     config.popup_msg_duration = 1.3;
     config.no_ping_icon_for_next_unit = true; --changed to true in 05/2020 update
 
+    config.seconds_idle_before_marked = 1.8;
+    config.seconds_between_idle_checks = 0.6;
+
     --This should save some users that might forget to put quotation marks around some strings like "script_F2"
     config.script_F2 = "script_F2"
     config.script_F3 = "script_F3"
@@ -290,6 +300,21 @@ do
     if config.popup_msg_duration == 0 then
         config.popup_msg_duration = false;
     end;
+
+    config.seconds_between_idle_checks = pancake_config_loader.convert_to_ms(config.seconds_between_idle_checks, false);
+    if not config.seconds_between_idle_checks then
+        config.seconds_between_idle_checks = 600; --we do need some positive value here
+        config.seconds_idle_before_marked = 0; --they probably meant that they didn't want the overhead of waiting between idle checks?
+    elseif config.seconds_between_idle_checks <= 0 then
+        config.seconds_between_idle_checks = 600; --we do need some positive value here
+    end;
+
+    config.seconds_idle_before_marked = pancake_config_loader.convert_to_ms(config.seconds_idle_before_marked, false);
+    if not config.seconds_idle_before_marked then
+        config.seconds_idle_before_marked = 0;
+    end;
+
+    pancake.keep_checking_in_background = config.seconds_idle_before_marked and (config.seconds_idle_before_marked > 0);
 
     --pancake.out("Config is: ");
     --for k, v in next, config do
@@ -372,6 +397,23 @@ function pancake:safely_remove_pancake_ping(mock_su)
     end;
 end;
 
+--pancake 06/2020
+function pancake:unit_is_effectively_idle(unit)
+    return unit:is_idle() and not unit:is_in_melee();
+end;
+
+function pancake:has_been_idle_enough(timestamp_when_idle)
+
+    local is_currently_idle = not not timestamp_when_idle;
+
+    --self:debug("checking if idle long enough: "..tostring(timestamp_tick).." >= ? "..tostring(timestamp_when_idle).." + "..tostring(config.seconds_idle_before_marked));
+    if is_currently_idle then
+        return timestamp_tick >= timestamp_when_idle + config.seconds_idle_before_marked;
+    else
+        return false;
+    end;
+end;
+
 --@p should_check_idle_first is an optional boolean. If true, then the ping will only be cleared if the unit is not idle
 --          (Note: this should not need to check if a unit is excluded because pings should be removed when a unit is first excluded)
 function pancake:clear_last_temporary_ping(should_check_idle_first)
@@ -387,7 +429,7 @@ function pancake:clear_last_temporary_ping(should_check_idle_first)
                 if not is_routing_or_dead(prev_mock_su, true) then
                     should_clear = true;
                     if self:find_unit_card(self.last_selected_idle) then --pancake edit 3/3/2020
-                        should_clear = not prev_mock_su.unit:is_idle();
+                        should_clear = not self:unit_is_effectively_idle(prev_mock_su.unit);
                     end;
                 end;
             end;
@@ -471,11 +513,11 @@ function pancake:mark_idles_ui()
     local sync_highlights_now = self.need_to_sync_highlights;
     self.need_to_sync_highlights = false;
     
-    for unit_key, is_idle in next, self.idle_flags do
+    for unit_key, timestamp_when_idle in next, self.idle_timestamps do
         local current_mock_su = self.map_key_to_mock_sus[unit_key];
         if current_mock_su then
             if self:find_unit_card(unit_key) then
-                if is_idle then
+                if self:has_been_idle_enough(timestamp_when_idle) then
                     if not current_mock_su.has_pancake_toggle_mark then
                         current_mock_su.has_pancake_toggle_mark = true;
                         self:highlight_unit_card_if_ok(current_mock_su, true);
@@ -488,6 +530,9 @@ function pancake:mark_idles_ui()
                         self:highlight_unit_card_if_ok(current_mock_su, true);
                     end;
                 else
+                    --if self.is_debug and timestamp_when_idle then
+                    --    self:debug("was not idle long enough, so not marking it. Time idle = "..tostring(timestamp_tick - timestamp_when_idle));
+                    --end;
                     self:clear_toggle_mark_for_unit(current_mock_su);
                 end;
 
@@ -500,7 +545,7 @@ end;
 
 --clears all idle marks
 function pancake:clear_idle_marks()
-    for unit_key, is_idle in next, self.idle_flags do
+    for unit_key, timestamp_when_idle in next, self.idle_timestamps do
         local current_mock_su = self.map_key_to_mock_sus[unit_key];
         if current_mock_su then
             if self:find_unit_card(unit_key) then
@@ -556,7 +601,7 @@ end;
 --              The reason for this is that units:count() and unit:is_idle() don't work when called from a hotkey listener for some reason
 function pancake:update_idles()
 
-    pancake.fill_table(self.idle_flags, false);
+    local tmp_idle_timestamps = {};
 
     for_each_unit_in_alliance(
         bm:get_player_alliance(),
@@ -564,8 +609,8 @@ function pancake:update_idles()
             local unit_key = tostring(current_unit:unique_ui_id());
 
             if not self:is_unit_excluded(unit_key) and self:find_unit_card(unit_key) then --this should filter out units controlled by other players (gifted in coop for example)
-                if current_unit:is_idle() then
-                    self.idle_flags[unit_key] = true;
+                if self:unit_is_effectively_idle(current_unit) then
+                    tmp_idle_timestamps[unit_key] = timestamp_tick;
                     if self.map_key_to_mock_sus[unit_key] == nil then
                         --this handles all units, including reinforcements and summons
 
@@ -577,13 +622,30 @@ function pancake:update_idles()
         end
     );
 
+    --clear anything that isn't effectively idle anymore
+    for unit_key, idle_timestamp in next, self.idle_timestamps do
+        if idle_timestamp and not tmp_idle_timestamps[unit_key] then
+            self.idle_timestamps[unit_key] = false; --not nil, since we rely on having an entry in this table for clearing idle marks
+        end;
+    end;
+
+    --transfer any new or updated values (this loop has some overlap with the previous loop, but this loops through a different table and handles different cases)
+    for unit_key, idle_timestamp in next, tmp_idle_timestamps do
+        if idle_timestamp and not self.idle_timestamps[unit_key] then
+            self.idle_timestamps[unit_key] = idle_timestamp;
+        end;
+    end;
+
 end;
 
+--this method always updates the idles lists and flags, but it only marks them in the UI if is_marking_idle_units
 function pancake:update_and_mark_all_idles()
 
     self:update_idles();
     if self.is_marking_idle_units then
+        --self:debug("Preparing to mark_idles_ui");
         self:mark_idles_ui(); --this also clears idle marks for units that just started moving, so do this whether or not we found an idle now
+        --self:debug("Done with mark_idles_ui");
     end;
 
     self.needs_update_after_command = false;
@@ -621,7 +683,7 @@ end;
 --returns true if actions were performed for the unit, false otherwise
 function pancake:helper_for_next_idle(unit_key)
 
-    self:debug("In helper_for_next_idle");
+    --self:debug("In helper_for_next_idle");
 
     local uic_card = self:find_unit_card(unit_key);
     if uic_card then
@@ -633,7 +695,7 @@ function pancake:helper_for_next_idle(unit_key)
         return true;
     end;
 
-    self:debug("End helper_for_next_idle with false")
+    --self:debug("End helper_for_next_idle with false")
 
     return false;
 end;
@@ -652,6 +714,7 @@ end;
 
 
 --is_callback_context is an optional parameter that moves the execution to a callback context
+--note: this commented script  might not be fully up-to-date; for example, idle_flags now stores timestamps, not booleans
 function pancake:select_next_idle(is_callback_context)
     if not self.esc_menu_is_visible() then
 
@@ -748,20 +811,20 @@ function pancake:select_next_idle(is_callback_context)
             return;
         end;
 
-        self:debug("In select_next_idle");
+        --self:debug("In select_next_idle");
 
         self:update_idles();
 
-        self:debug("After updating idles");
+        --self:debug("After updating idles");
     
         local found_idle = false;
         local loop_around_to_beginning = (self.last_selected_idle ~= nil);
         local start_looping_from = self.last_selected_idle;
 
         --start looking after self.last_selected_idle, not from the beginning of the list
-        for unit_key, is_idle in next, self.idle_flags, start_looping_from do
+        for unit_key, timestamp_when_idle in next, self.idle_timestamps, start_looping_from do
 
-            if is_idle then
+            if self:has_been_idle_enough(timestamp_when_idle) then
                 found_idle = self:helper_for_next_idle(unit_key);
                 if found_idle then
                     break;
@@ -772,8 +835,8 @@ function pancake:select_next_idle(is_callback_context)
         if not found_idle then
             if loop_around_to_beginning then
                 --then, if nothing was found, iterate from the beginning to the last selected
-                for unit_key, is_idle in next, self.idle_flags, nil do
-                    if is_idle then
+                for unit_key, timestamp_when_idle in next, self.idle_timestamps, nil do
+                    if self:has_been_idle_enough(timestamp_when_idle) then
                         found_idle = self:helper_for_next_idle(unit_key);
                         if found_idle then
                             break;
@@ -790,13 +853,26 @@ function pancake:select_next_idle(is_callback_context)
         end;
     end;
 
-    self:debug("End select_next_idle");
+    --self:debug("End select_next_idle");
 end;
 
---helper function
-function pancake:remove_processes_for_toggle()
-    bm:remove_process("pancake:update_and_mark_all_idles_once");
-    bm:remove_process("pancake:update_and_mark_all_idles_repeating");
+--this sets up the background process (callback) for updating whether units are idle
+--this should not set any flags indicating whether the idle units should be marked in the UI 
+function pancake:set_update_idles_process(should_find)
+    if should_find then
+        bm:callback(function() self:update_and_mark_all_idles() end, 0, "pancake:update_and_mark_all_idles_once");
+        if not self.has_callback_for_updating_idles then
+            bm:repeat_callback(function() self:update_and_mark_all_idles() end, config.seconds_between_idle_checks, "pancake:update_and_mark_all_idles_repeating");
+            self.has_callback_for_updating_idles = true;
+        end;
+    else
+        bm:remove_process("pancake:update_and_mark_all_idles_once");
+        if not self.keep_checking_in_background then
+            bm:remove_process("pancake:update_and_mark_all_idles_repeating");
+            self.has_callback_for_updating_idles = false; --this is used in association with keep_checking_in_background
+        end;
+        bm:callback(function() self:clear_idle_marks(); end, 0, "pancake:clear_idle_marks");
+    end;
 end;
 
 --skip_popup is an optional parameter, and it's not needed if config.no_popup_msg is set
@@ -809,14 +885,7 @@ function pancake:set_should_find_idle_units(should_find, skip_popup)
         self.is_marking_idle_units = should_find;
         
         if self.is_deployed then
-            
-            if should_find then
-                bm:callback(function() self:update_and_mark_all_idles() end, 0, "pancake:update_and_mark_all_idles_once");
-                bm:repeat_callback(function() self:update_and_mark_all_idles() end, 600, "pancake:update_and_mark_all_idles_repeating");
-            else
-                bm:callback(function() self:remove_processes_for_toggle(); end, 0, "pancake:remove_processes_for_toggle");
-                bm:callback(function() self:clear_idle_marks(); end, 0, "pancake:clear_idle_marks");
-            end;
+            self:set_update_idles_process(should_find);
         end;
         
         if not skip_popup then
@@ -834,7 +903,7 @@ function pancake:set_should_find_idle_units(should_find, skip_popup)
 end;
 
 function pancake:setup_map_key_to_mock_sus()
-    self:debug("Setting up map_key_to_mock_sus")
+    --self:debug("Setting up map_key_to_mock_sus")
     for_each_unit_in_alliance(
         bm:get_player_alliance(),
 		function(current_unit, current_army, unit_index_in_army)
@@ -844,7 +913,7 @@ function pancake:setup_map_key_to_mock_sus()
 			end;
         end
 	);
-	self:debug("End of setup_map_key_to_mock_sus");
+	--self:debug("End of setup_map_key_to_mock_sus");
 end;
 
 function pancake:phase_startup()
@@ -920,7 +989,7 @@ function pancake:phase_startup()
             "ComponentLClickUp",
             function(context) return context.string == "pancake_idle_exclusion_button"; end,
             function()
-                pancake:debug("The exclude/include button was pressed.");
+                --pancake:debug("The exclude/include button was pressed.");
                 pancake:toggle_exclude_on_selected_units(false);
             end,
             true
@@ -940,7 +1009,7 @@ function pancake:respond_to_relevant_battle_commands(command_context)
 
             if pancake.is_paused() and not self.needs_update_after_command then
 
-                if self.is_marking_idle_units then
+                if self.is_marking_idle_units or self.keep_checking_in_background then
                     self.needs_update_after_command = true;
                     bm:callback(function() self:update_and_mark_all_idles(); end, 0, "pancake:respond_to_relevant_battle_commands_all");
                 else
@@ -968,7 +1037,7 @@ end;
 --           most units should be anyway, but if in doubt, check before calling this function 
 function pancake:set_excluded_for_units(table_of_unit_keys, should_exclude, is_callback_context)
 
-    self:debug("In set_excluded_for_units");
+    --self:debug("In set_excluded_for_units");
 
     if not is_callback_context then
         bm:callback(
@@ -977,7 +1046,7 @@ function pancake:set_excluded_for_units(table_of_unit_keys, should_exclude, is_c
             "pancake_callback_exclude_fun"
         );
 
-        self:debug("set_excluded_for_units will wait for a callback. Returning for now");
+        --self:debug("set_excluded_for_units will wait for a callback. Returning for now");
         
         return;
     end;
@@ -998,17 +1067,17 @@ function pancake:set_excluded_for_units(table_of_unit_keys, should_exclude, is_c
             else
                 self.exclusion_map[unit_key] = nil;
             end;
-            self:debug("Set exclusion list for "..tostring(unit_key).." to "..tostring(should_exclude));
+            --self:debug("Set exclusion list for "..tostring(unit_key).." to "..tostring(should_exclude));
         end;
     end;
 
     if changed_exclusions then
         if should_exclude then
 
-            self:debug("Exclusions looping through a second time now");
+            --self:debug("Exclusions looping through a second time now");
             for i = 1, #table_of_unit_keys do
                 local unit_key = table_of_unit_keys[i];
-                self.idle_flags[unit_key] = nil;
+                self.idle_timestamps[unit_key] = false;
 
                 if self:is_ok_phase_to_mark_idles() then
 
@@ -1019,7 +1088,6 @@ function pancake:set_excluded_for_units(table_of_unit_keys, should_exclude, is_c
                     local current_mock_su = self.map_key_to_mock_sus[unit_key];
 
                     if current_mock_su.unit:can_use_magic() then
-                        self:debug("Trying to count available spells");
                         --this should only called/set after the deployed phase
                         --before that, num_spells_when_excluded is undefined
                         self.exclusion_map[unit_key].num_spells_when_excluded = self:count_available_spells_for(unit_key);
@@ -1038,7 +1106,7 @@ function pancake:set_excluded_for_units(table_of_unit_keys, should_exclude, is_c
         self:update_exclusion_button_state();
     end;
 
-    self:debug("End set unit excluded");
+    --self:debug("End set unit excluded");
 end;
 
 --scrapes the UI to find how many spells are currently available to the spellcaster
@@ -1105,7 +1173,7 @@ function pancake:exclude_spellcasters(should_exclude, is_callback_context)
         should_exclude = true;
     end;
 
-    self:debug("Checking for spellcasters to exclude/include.");
+    --self:debug("Checking for spellcasters to exclude/include.");
 
     local tmp_unit_keys = {};
 
@@ -1123,7 +1191,7 @@ function pancake:exclude_spellcasters(should_exclude, is_callback_context)
 
                 table.insert(tmp_unit_keys, unit_key);
 
-                self:debug("Preparing to exclude/include spellcaster - " .. tostring(current_unit:name()));
+                --self:debug("Preparing to exclude/include spellcaster - " .. tostring(current_unit:name()));
             end;
         end
     );
@@ -1186,7 +1254,7 @@ function pancake:check_for_break_gates_notification()
                     --as of the time of this writing, the image we cared about was at index 1
                     --but check all to be safe in case the index changes in an update
                     for img_index = 0, num_img-1 do
-                        self:debug("UIC GetImagePath"..tostring(img_index)..": "..tostring(uic:GetImagePath(img_index)));
+                        --self:debug("UIC GetImagePath"..tostring(img_index)..": "..tostring(uic:GetImagePath(img_index)));
                         local img_path = tostring(uic:GetImagePath(img_index));
 
                         --at time of this writing, we wanted the one at UI/Battle UI/ADC_icons/icon_attacking_gates.png
@@ -1220,7 +1288,7 @@ function pancake:include_again_if_gates_just_broke(is_callback_context)
         for unit_key, exclusion_condition in next, self.exclusion_map do
             table.insert(units_to_include, unit_key);
         end;
-        self:debug("Since gates broke, call set_exclude_for_units");
+        --self:debug("Since gates broke, call set_exclude_for_units");
         self:set_excluded_for_units(units_to_include, false, is_callback_context);
     else
         --wait until the notification appears, or until it goes away and reappears
@@ -1246,6 +1314,10 @@ function pancake:phase_deployed()
             config.toggle_on_automatically_after,
             "pancake:auto_start_toggle"
         );
+    end;
+    
+    if pancake.keep_checking_in_background and not self.is_marking_idle_units then
+        self:set_update_idles_process(true);
     end;
     
     bm:pancake_set_listener_for_battle_commands(
@@ -1314,8 +1386,9 @@ function pancake:phase_complete()
     self.is_deployed = false;
     self.is_battle_complete = true;
 
-    self:remove_processes_for_toggle();
     bm:remove_process("pancake:auto_start_toggle");
+    bm:remove_process("pancake:update_and_mark_all_idles_once");
+    bm:remove_process("pancake:update_and_mark_all_idles_repeating");
 
     bm:pancake_clear_listeners_for_battle_commands();
     bm:pancake_idle_clear_listeners_for_selections();
@@ -1358,9 +1431,10 @@ core:add_listener(
 --Note that if is_callback_context is false, the actual exclusion won't happen immediately in code until the callback
 --returns true  if the selected units will be all be excluded after the callback
 --returns false if the selected units will be all be included after the callback
+--returns nil if nothing was selected (might change in the future)
 function pancake:toggle_exclude_on_selected_units(is_callback_context)
 
-    self:debug("In toggle_exclude_on_selected_units");
+    --self:debug("In toggle_exclude_on_selected_units");
 
     local uic_parent = find_uicomponent(core:get_ui_root(), "battle_orders", "cards_panel", "review_DY");
     local selected_ui_ids = {}; --table of string ids
@@ -1384,7 +1458,7 @@ function pancake:toggle_exclude_on_selected_units(is_callback_context)
     if #selected_ui_ids == 0 then
         --TODO: if nothing was selected, should it reinclude everything, or exclude anything currently idle, or just do nothing?
         --Currently it just does nothing
-        return;
+        return nil;
     end;
 
     local first_selected_id = selected_ui_ids[1];
@@ -1401,7 +1475,7 @@ function pancake:toggle_exclude_on_selected_units(is_callback_context)
     
     self:set_excluded_for_units(selected_ui_ids, change_all_to_be_excluded, is_callback_context);
 
-    self:debug("End of toggle_exclude_on_selected_units");
+    --self:debug("End of toggle_exclude_on_selected_units");
 
     return change_all_to_be_excluded;
 end;
@@ -1421,7 +1495,7 @@ if config.use_hotkey_to_exclude_unit then
         function(context) return context.string == pancake_exclude_hotkey; end,
         function()
             local pancake_object = pancake;
-            pancake_object:debug("Exclusion hotkey was pressed.");
+            --pancake_object:debug("Exclusion hotkey was pressed.");
             if not pancake_object.is_battle_complete then
                 bm:callback(function() pancake_object:toggle_exclude_on_selected_units(true) end, 0, "pancake_toggle_exclude_selected");
             end;
