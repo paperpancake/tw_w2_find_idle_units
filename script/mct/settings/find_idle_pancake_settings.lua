@@ -89,7 +89,10 @@ local function create_local_option(section_key, ...)
 end;
 
 --NOTE: camera_bookmark_save9 in English localization appears as "Save Camera Bookmark 10"
-local function create_configured_hotkey_dropdown(section_key, option_key, camera_bookmark_number, use_camera_bookmark_as_default)
+--@param [disallow_ctrl_and_shift] is an optional boolean, defaults to false
+local function create_configured_hotkey_dropdown(section_key, option_key, camera_bookmark_number, use_camera_bookmark_as_default, disallow_ctrl_and_shift)
+
+    local can_use_ctrl_and_shift = not disallow_ctrl_and_shift;
 
     local new_dropdown = create_local_option(section_key, option_key, "dropdown");
     new_dropdown:add_dropdown_value("no", "No", "", not use_camera_bookmark_as_default);
@@ -100,18 +103,36 @@ local function create_configured_hotkey_dropdown(section_key, option_key, camera
         local bookmark_key = "camera_bookmark_save"..tostring(camera_bookmark_number);
         local bookmark_loc = "shortcut_localisation_onscreen_"..bookmark_key;
 
-        new_dropdown:add_dropdown_value(bookmark_key, bookmark_loc, "Bind to whatever keys you want in the Controls menu.", use_camera_bookmark_as_default);
+        local tooltip_text;
+        if can_use_ctrl_and_shift then
+            tooltip_text = "Bind to whatever keys you want in the Controls menu.";
+        else
+            tooltip_text = "Do NOT use Ctrl or Shift in this hotkey! Bind in the Controls menu.";
+        end;
+
+        new_dropdown:add_dropdown_value(bookmark_key, bookmark_loc, tooltip_text, use_camera_bookmark_as_default);
     end;
 
     new_dropdown:add_dropdown_value("script_F2", "F2", "");
-    new_dropdown:add_dropdown_value("script_shift_F2", "Shift + F2", "");
-    new_dropdown:add_dropdown_value("script_ctrl_F2", "Ctrl + F2", "");
+
+    if can_use_ctrl_and_shift then
+        new_dropdown:add_dropdown_value("script_shift_F2", "Shift + F2", "");
+        new_dropdown:add_dropdown_value("script_ctrl_F2", "Ctrl + F2", "");
+    end;
+
     new_dropdown:add_dropdown_value("script_F3", "F3", "");
-    new_dropdown:add_dropdown_value("script_shift_F3", "Shift + F3", "");
-    new_dropdown:add_dropdown_value("script_ctrl_F3", "Ctrl + F3", "");
+
+    if can_use_ctrl_and_shift then
+        new_dropdown:add_dropdown_value("script_shift_F3", "Shift + F3", "");
+        new_dropdown:add_dropdown_value("script_ctrl_F3", "Ctrl + F3", "");
+    end;
+
     new_dropdown:add_dropdown_value("script_F4", "F4", "");
-    new_dropdown:add_dropdown_value("script_shift_F4", "Shift + F4", "");
-    new_dropdown:add_dropdown_value("script_ctrl_F4", "Ctrl + F4", "");
+    
+    if can_use_ctrl_and_shift then
+        new_dropdown:add_dropdown_value("script_shift_F4", "Shift + F4", "");
+        new_dropdown:add_dropdown_value("script_ctrl_F4", "Ctrl + F4", "");
+    end;
 
     return new_dropdown;
 end;
@@ -158,9 +179,9 @@ end;
 --- @section section_main_hotkeys
 -------------------------------------------------------------------------------------------------------------------------------
 
-local hotkey_for_toggle_find_all_idle = create_configured_hotkey_dropdown("section_main_hotkeys", "hotkey_for_toggle_find_all_idle", 9, true);
+local hotkey_for_toggle_find_all_idle = create_configured_hotkey_dropdown("section_main_hotkeys", "hotkey_for_toggle_find_all_idle", 9, true, false);
 
-local hotkey_for_next_idle_unit = create_configured_hotkey_dropdown("section_main_hotkeys", "hotkey_for_next_idle_unit", 10, true);
+local hotkey_for_next_idle_unit = create_configured_hotkey_dropdown("section_main_hotkeys", "hotkey_for_next_idle_unit", 10, true, true);
 
 -------------------------------------------------------------------------------------------------------------------------------
 --- @section section_misc
@@ -213,18 +234,7 @@ local add_button_to_exclude_unit = create_local_option("section_exclude_include"
 add_button_to_exclude_unit:set_default_value(false);
 exclude_dependency_group:add_master_option(add_button_to_exclude_unit, nil);
 
-local use_hotkey_to_exclude_unit = create_local_option("section_exclude_include", "use_hotkey_to_exclude_unit", "dropdown");
-use_hotkey_to_exclude_unit:add_dropdown_value("no", "No", "", true);
-use_hotkey_to_exclude_unit:add_dropdown_value("camera_bookmark_save11", "Save Camera Bookmark 12", "Bind to whatever keys you want in the Controls menu."); --NOTE: camera_bookmark_save5 in English localization appears as Save Camera Bookmark 6"
-use_hotkey_to_exclude_unit:add_dropdown_value("script_F2", "F2", "");
-use_hotkey_to_exclude_unit:add_dropdown_value("script_shift_F2", "Shift + F2", "");
-use_hotkey_to_exclude_unit:add_dropdown_value("script_ctrl_F2", "Ctrl + F2", "");
-use_hotkey_to_exclude_unit:add_dropdown_value("script_F3", "F3", "");
-use_hotkey_to_exclude_unit:add_dropdown_value("script_shift_F3", "Shift + F3", "");
-use_hotkey_to_exclude_unit:add_dropdown_value("script_ctrl_F3", "Ctrl + F3", "");
-use_hotkey_to_exclude_unit:add_dropdown_value("script_F4", "F4", "");
-use_hotkey_to_exclude_unit:add_dropdown_value("script_shift_F4", "Shift + F4", "");
-use_hotkey_to_exclude_unit:add_dropdown_value("script_ctrl_F4", "Ctrl + F4", "");
+local use_hotkey_to_exclude_unit = create_configured_hotkey_dropdown("section_exclude_include", "use_hotkey_to_exclude_unit", 11, false, false);
 exclude_dependency_group:add_master_option(use_hotkey_to_exclude_unit, function() return use_hotkey_to_exclude_unit:get_selected_setting() ~= "no"; end);
 
 local exclude_spellcasters_by_default = create_local_option("section_exclude_include", "exclude_spellcasters_by_default", "checkbox");
