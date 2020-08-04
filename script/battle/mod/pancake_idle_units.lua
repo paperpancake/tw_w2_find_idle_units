@@ -15,15 +15,16 @@
 --So all the units can have names like "1:1:player_army", which confuses script_unit:new(...),
 --since units:item() can find a unit based on the name
 
+local this_mod_key = "pancake_find_idle";
+
 local bm = get_bm();
-local config;
-local config_log_msg;
 
 --Since The Warden & The Paunch update, these require calls need to be below get_bm() for some reason
 require("pancake_mock_script_unit");
 require("pancake_battle_ui_handler");
 require("script/pancake_lib/pancake_config_loader");
 --there could be another require() below depending on the configuration
+    --require("battlemod_button_ext");
 
 if not is_function(toboolean) then
     --defined for readability
@@ -47,7 +48,7 @@ local pancake = {
     --idle_timestamps[unit_key] == timestamp_tick when it the unit was first marked as idle (and not in the exclusion_map), or false otherwise (not nil, since we need to know whether to clear existing marks)
     idle_timestamps = {},
     map_key_to_mock_sus = {}, --map_key_to_mock_sus[unit_key] == the mock_su for the unit that has the given unit key
-                        --As an abbreviation for script_unit, I prefer su over sunit here because sunit and unit look similar in this code
+                              --As an abbreviation for script_unit, I prefer su over sunit here because sunit and unit look similar in this code
 
     --if a unit should be excluded, then the exclusion_map should have an entry
     --of exclusion_map[unit_key] = pancake_exclusion_condition,
@@ -99,9 +100,16 @@ end;
 
 -------------------------------------------------------------------------------------------------------------------------------
 --- @section Static Methods
+--- (plus pancake:debug(), because I need it defined early)
 -------------------------------------------------------------------------------------------------------------------------------
 function pancake.out(msg)
     out("&&& paperpancake's Find Idle Units mod: "..msg);
+end;
+
+function pancake:debug(msg)
+    if self.is_debug then
+        pancake.out(msg);
+    end;
 end;
 
 function pancake.fill_table(given_list, fill_value)
@@ -142,6 +150,243 @@ function pancake.esc_menu_is_visible()
 end;
 
 -------------------------------------------------------------------------------------------------------------------------------
+--- @section Optional Configuration
+--- @desc The user can provide a text file containing variable assignments
+-------------------------------------------------------------------------------------------------------------------------------
+
+local config = nil;
+local already_loaded_config = false;
+local mct_local_reference = false;
+
+core:add_listener(
+    "find_idle_mct_init_listener",
+    "MctInitialized",
+    true,
+    function(context)
+
+        mct_local_reference = context:mct();
+
+        if already_loaded_config then
+
+            local mct_order_warning = "Warning: Please let the author of Find Idle Units know you received the following warning: MCT settings weren't available until after configuration was needed. We're ignoring them for this battle.";
+
+            pancake.out(mct_order_warning);
+
+            --if we already have loaded configuration from the file and weren't supposed to,
+            --provide some kind of visual indication of that the MCT settings are being ignored
+            --it should appear whether or not the config file asks for no popup messages
+            local mct = mct_local_reference;
+            if mct then
+                local mct_for_find_idle = mct:get_mod_by_key(this_mod_key);
+        
+                if mct_for_find_idle then
+        
+                    local option_which_config = mct_for_find_idle:get_option_by_key("option_which_config");
+                    config_type = option_which_config:get_finalized_setting(); --"mct", "file", or "original" (shouldn't be nil here, but theoretically could be)
+        
+                    if config_type ~= "file" then
+                        bm:callback(function() effect.advice(mct_order_warning) end, 3000, this_mod_key.."_mct_order_warning_dialog");
+                    end;
+                end;
+            end;
+        end;
+    end,
+    true
+);
+
+--returns the MCT (or nil if it's not found)
+local function try_to_get_MCT()
+    
+    local mct = nil;
+
+    if is_function(get_mct) then
+        mct = get_mct();
+    end;
+    
+    return mct;
+end;
+
+local function create_config_table_with_defaults()
+    local config = {
+        
+        hotkey_for_toggle_find_all_idle = true,
+        hotkey_for_next_idle_unit = true,
+
+        popup_msg_duration = 1.3,
+        no_ping_icon_for_next_unit = true, --changed to true in 05/2020 update
+        seconds_idle_before_marked = 1.8,
+        seconds_between_idle_checks = 0.6,
+
+        --This should save some users that might forget to put quotation marks around some strings like "script_F2"
+        script_F2 = "script_F2",
+        script_F3 = "script_F3",
+        script_F4 = "script_F4",
+        script_shift_F2 = "script_shift_F2",
+        script_shift_F3 = "script_shift_F3",
+        script_shift_F4 = "script_shift_F4",
+        script_ctrl_F2 = "script_ctrl_F2",
+        script_ctrl_F3 = "script_ctrl_F3",
+        script_ctrl_F4 = "script_ctrl_F4",
+    };
+
+    return config;
+end;
+
+local function process_config_time_settings(config)
+    config.toggle_on_automatically_after = pancake_config_loader.convert_to_ms(config.toggle_on_automatically_after, false);
+    if config.toggle_on_automatically_after == 0 then
+        local pancake_object = pancake;
+        pancake_object.is_marking_idle_units = true;
+    end;
+
+    config.popup_msg_duration = pancake_config_loader.convert_to_ms(config.popup_msg_duration, true);
+    if config.popup_msg_duration == 0 then
+        config.popup_msg_duration = false;
+    end;
+
+    config.seconds_between_idle_checks = pancake_config_loader.convert_to_ms(config.seconds_between_idle_checks, false);
+    if not config.seconds_between_idle_checks then
+        config.seconds_between_idle_checks = 600; --we do need some positive value here
+        config.seconds_idle_before_marked = 0; --they probably meant that they didn't want the overhead of waiting between idle checks?
+    elseif config.seconds_between_idle_checks <= 0 then
+        config.seconds_between_idle_checks = 600; --we do need some positive value here
+    end;
+
+    config.seconds_idle_before_marked = pancake_config_loader.convert_to_ms(config.seconds_idle_before_marked, false);
+    if not config.seconds_idle_before_marked then
+        config.seconds_idle_before_marked = 0;
+    end;
+
+    pancake.keep_checking_in_background = config.seconds_idle_before_marked and (config.seconds_idle_before_marked > 0);
+end;
+
+local function unpack_config_from_mct(mct, my_mod)
+
+    local config, config_log_msg = nil, nil;
+
+    config = create_config_table_with_defaults();
+
+    local all_options = my_mod:get_options();
+    for k, v in next, all_options do
+        config[k] = v:get_finalized_setting();
+    end;
+
+    --handle any options that don't just directly transfer from MCT to file settings
+
+    if config.use_hotkey_to_exclude_unit == "no" then
+        config.use_hotkey_to_exclude_unit = false;
+    end;
+
+    if config.hotkey_for_toggle_find_all_idle == "no" then
+        config.hotkey_for_toggle_find_all_idle = false;
+    end;
+
+    if config.hotkey_for_next_idle_unit == "no" then
+        config.hotkey_for_next_idle_unit = false;
+    end;
+
+    config.no_card_pulsing_for_toggle = not config.pulse_toggle;
+    config.no_ping_icon_for_toggle = not config.ping_toggle;
+    config.no_ping_icon_for_next_unit = not config.ping_next;
+    config.no_camera_pan_for_next_unit = not config.camera_pan_next;
+
+    return config, config_log_msg;
+end;
+
+local function try_loading_config_from_mct()
+
+    local config, config_type, config_log_msg = nil, nil, nil;
+
+    local mct = try_to_get_MCT();
+
+    if mct then
+        local my_mod = mct:get_mod_by_key(this_mod_key);
+
+        if my_mod then
+
+            local option_which_config = my_mod:get_option_by_key("option_which_config");
+            config_type = option_which_config:get_finalized_setting(); --"mct", "file", or "original" (shouldn't be nil here, but theoretically could be)
+
+            if config_type == "mct" then
+                config, config_log_msg = unpack_config_from_mct(mct, my_mod);
+            end;
+
+        else
+            --config_type = nil;
+        end;
+    else
+        --config_type = nil;
+    end;
+
+    return config, config_type, config_log_msg;
+
+end;
+
+local function try_loading_config_from_file()
+
+    local success, file_found, msg;
+
+    local config, config_log_msg;
+
+    config = create_config_table_with_defaults();
+
+    success, file_found, msg, config = pancake_config_loader.load_file("./mod_config/find_idle_units_config.txt", config);
+
+    if not file_found then
+        --This might be the most common use case, so don't provide a visual dialog
+        pancake.out("No config file found; using default values.");
+    else
+        if not success then
+            config_log_msg = "The config file could not be completely read. There might be an error in it.\n"
+                        .."Loaded as much as could be read up to the error, which was:\n"
+                        ..msg;
+            pancake.out(config_log_msg);
+            --config_log_msg is also used further below
+        else
+            pancake.out("Config was loaded.");
+        end;
+    end;
+
+    return config, config_log_msg;
+end;
+
+--config_type is "mct", "file", or "original", or nil
+--TODO: test this with and without the mct, and with and without the file
+local function pancake_idle_load_config()
+
+    local config, config_type, config_log_msg;
+
+    config, config_type, config_log_msg = try_loading_config_from_mct();
+
+    --pancake:debug('config_type after looking for mct is: '..tostring(config_type));
+
+    if config_type == "file" or config_type == nil then
+        if config_type == nil then
+            config_type = "file";
+        end;
+        config, config_log_msg = try_loading_config_from_file();
+
+    elseif config_type == "original" then
+        config = create_config_table_with_defaults();
+    elseif config_type == "mct" then
+        --config should already be set
+    end;
+
+    process_config_time_settings(config);
+    already_loaded_config = true;
+
+    if pancake.is_debug then
+        pancake.out("Config is: ");
+        for k, v in next, config do
+            pancake.out(tostring(k).." = "..tostring(v));
+        end;
+    end;
+
+    return config, config_log_msg;
+end;
+
+
+-------------------------------------------------------------------------------------------------------------------------------
 --- @section Extend the battle_manager's functionality
 --- @desc This will allow me to more easily listen for any battle commands or selection changes
 -------------------------------------------------------------------------------------------------------------------------------
@@ -161,7 +406,7 @@ do
     function bm:pancake_set_listener_for_battle_commands(callback_key, callback)
 
         if not (callback_key and is_string(callback_key) and callback and is_function(callback)) then
-            pancake.out("Bad arguments provided to bm:pancake_add_listener_for_battle_commands");
+            pancake.out("Bad arguments provided to bm:pancake_set_listener_for_battle_commands");
             return;
         end;
 
@@ -214,7 +459,7 @@ do
     --the order that the listeners will be called in is not guaranteed
     function bm:pancake_idle_set_listener_for_selections(callback_key, callback)
         if not (callback_key and is_string(callback_key) and callback and is_function(callback)) then
-            pancake.out("Bad arguments provided to bm:pancake_add_listener_for_battle_commands");
+            pancake.out("Bad arguments provided to bm:pancake_idle_set_listener_for_selections");
             return;
         end;
 
@@ -245,98 +490,10 @@ do
     end;
 end;
 
-
--------------------------------------------------------------------------------------------------------------------------------
---- @section Optional Configuration
---- @desc The user can provide a text file containing variable assignments
--------------------------------------------------------------------------------------------------------------------------------
-
-do
-    local success, file_found, msg;
-
-    --set default values before loading the config file
-    config = {};
-    config.popup_msg_duration = 1.3;
-    config.no_ping_icon_for_next_unit = true; --changed to true in 05/2020 update
-
-    config.seconds_idle_before_marked = 1.8;
-    config.seconds_between_idle_checks = 0.6;
-
-    --This should save some users that might forget to put quotation marks around some strings like "script_F2"
-    config.script_F2 = "script_F2"
-    config.script_F3 = "script_F3"
-    config.script_F4 = "script_F4"
-    config.script_shift_F2 = "script_shift_F2"
-    config.script_shift_F3 = "script_shift_F3"
-    config.script_shift_F4 = "script_shift_F4"
-    config.script_ctrl_F2 = "script_ctrl_F2"
-    config.script_ctrl_F3 = "script_ctrl_F3"
-    config.script_ctrl_F4 = "script_ctrl_F4"
-
-    success, file_found, msg, config = pancake_config_loader.load_file("./mod_config/find_idle_units_config.txt", config);
-
-    if not file_found then
-        --This might be the most common use case, so don't provide a visual dialog
-        pancake.out("No config file found; using default values.");
-    else
-        if not success then
-            config_log_msg = "The config file could not be completely read. There might be an error in it.\n"
-                        .."Loaded as much as could be read up to the error, which was:\n"
-                        ..msg;
-            pancake.out(config_log_msg);
-            --config_log_msg is also used further below
-        else
-            pancake.out("Config was loaded.");
-        end;
-    end;
-
-    config.toggle_on_automatically_after = pancake_config_loader.convert_to_ms(config.toggle_on_automatically_after, false);
-    if config.toggle_on_automatically_after == 0 then
-        local pancake_object = pancake;
-        pancake_object.is_marking_idle_units = true;
-    end;
-
-    config.popup_msg_duration = pancake_config_loader.convert_to_ms(config.popup_msg_duration, true);
-    if config.popup_msg_duration == 0 then
-        config.popup_msg_duration = false;
-    end;
-
-    config.seconds_between_idle_checks = pancake_config_loader.convert_to_ms(config.seconds_between_idle_checks, false);
-    if not config.seconds_between_idle_checks then
-        config.seconds_between_idle_checks = 600; --we do need some positive value here
-        config.seconds_idle_before_marked = 0; --they probably meant that they didn't want the overhead of waiting between idle checks?
-    elseif config.seconds_between_idle_checks <= 0 then
-        config.seconds_between_idle_checks = 600; --we do need some positive value here
-    end;
-
-    config.seconds_idle_before_marked = pancake_config_loader.convert_to_ms(config.seconds_idle_before_marked, false);
-    if not config.seconds_idle_before_marked then
-        config.seconds_idle_before_marked = 0;
-    end;
-
-    pancake.keep_checking_in_background = config.seconds_idle_before_marked and (config.seconds_idle_before_marked > 0);
-
-    --pancake.out("Config is: ");
-    --for k, v in next, config do
-    --    pancake.out(tostring(k).." = "..tostring(v));
-    --end;
-
-end;
-
-if config.add_button_to_exclude_unit then
-    require("battlemod_button_ext");
-end;
-
 -------------------------------------------------------------------------------------------------------------------------------
 --- @section Pancake Methods
 --- @desc Some of these methods could be static, too, but then some would use ":" and some "." Consistency is better for now.
 -------------------------------------------------------------------------------------------------------------------------------
-
-function pancake:debug(msg)
-    if self.is_debug then
-        pancake.out(msg);
-    end;
-end;
 
 -- modified from lib_battle_script_unit's highlight_unit_card
 -- I'm also using this to filter for units that are under your control in multiplayer battles with gifted units
@@ -688,10 +845,10 @@ function pancake:helper_for_next_idle(unit_key)
     local uic_card = self:find_unit_card(unit_key);
     if uic_card then
         self:select_unit(uic_card, true); --uic_card, not unit_key
-        self:debug("After select_unit");
+        --self:debug("After select_unit");
         self:ping_unit_if_ok(unit_key, false);
         self.last_selected_idle = unit_key; --this needs to be set *after* (or at the end of) pancake:helper_for_next_idle()
-        self:debug("End helper_for_next_idle with true")
+        --self:debug("End helper_for_next_idle with true")
         return true;
     end;
 
@@ -916,11 +1073,46 @@ function pancake:setup_map_key_to_mock_sus()
 	--self:debug("End of setup_map_key_to_mock_sus");
 end;
 
-function pancake:phase_startup()
+--This is a helper function that takes care of the details of adding a hotkey listener based on config values
+--(creating the listener's functions using this function's parameters works because of closures and upvalues, in case you wondered)
+function pancake:add_configured_hotkey_listener(listener_key, config_setting, default_hotkey_string, function_for_hotkey)
+    
+    --self:debug("in add_configured_hotkey_listener, listener_kay is "..tostring(listener_key)..", config_setting = "..tostring(config_setting).." isstring = "..tostring(is_string(config_setting)));
+
+    --Note that this listener is only added if the user has set this configuration option
+    --config.use_hotkey_to_exclude_unit could be set to true or to a string key indicating the hotkey
+    local hotkey_string = default_hotkey_string; -- save(#) appears in the game as save(# + 1)
+    if config_setting then
+
+        if is_string(config_setting) and config_setting ~= "true" then
+            hotkey_string = config_setting;
+        end;
+
+        core:add_listener(
+            listener_key,
+            "ShortcutTriggered",
+            function(context) return context.string == hotkey_string; end,
+            function_for_hotkey,
+            true
+        );
+    end;
+end;
+
+--Note: this is currently called at the phase PrebattleWeather instead of Startup for MCT reasons.
+function pancake:phase_prebattle() --TODO: if this change from startup to prebattle sticks, check to see if other renaming makes sense 
+
+    local config_log_msg;
+
+    config, config_log_msg = pancake_idle_load_config();
+
     if config_log_msg then
         --this provides some kind of visual indication of an error in the config file
         --it should appear whether or not config.no_popup_msg is set
         effect.advice(config_log_msg); --this should be ok even if the log msg is long, since the advisor can scroll
+    end;
+
+    if config.add_button_to_exclude_unit then
+        require("battlemod_button_ext");
     end;
 
     self:setup_map_key_to_mock_sus();
@@ -929,21 +1121,68 @@ function pancake:phase_startup()
         self:exclude_spellcasters(true);
     end;
 
+    pancake:add_configured_hotkey_listener(
+        "pancake_idle_mark_listener",
+        config.hotkey_for_toggle_find_all_idle,
+        "camera_bookmark_save9", -- save9 appears in the game as Save10
+        function()
+            local pancake_object = pancake;
+            pancake_object:set_should_find_idle_units(not pancake_object.is_marking_idle_units);
+        end
+    );
+
+    pancake:add_configured_hotkey_listener(
+        "pancake_next_idle_listener",
+        config.hotkey_for_next_idle_unit,
+        "camera_bookmark_save10", -- save10 appears in the game as Save11
+        function()
+            local pancake_object = pancake;
+            --pancake_object:debug("In camera_bookmark_save10 for find_next_idle");
+            if not pancake_object.is_battle_complete then
+                if pancake_object.is_deployed then
+                    pancake_object:select_next_idle(false);
+                else
+                    pancake_object:show_popup_msg_if_ok("Next idle is not enabled until the battle has started.");
+                end;
+            end;
+        end
+    );
+
+    pancake:add_configured_hotkey_listener(
+        "pancake_exclude_from_idle_listener",
+        config.use_hotkey_to_exclude_unit,
+        "camera_bookmark_save11",
+        function()
+            local pancake_object = pancake;
+            --pancake_object:debug("Exclusion hotkey was pressed.");
+            if not pancake_object.is_battle_complete then
+                bm:callback(function() pancake_object:toggle_exclude_on_selected_units(true) end, 0, "pancake_toggle_exclude_selected");
+            end;
+        end
+    );
+
     if config.add_button_to_exclude_unit then
 
-        self:debug("Adding battlemod button for excluding/including units.");
+        --self:debug("Adding battlemod button for excluding/including units.");
         self.pancake_idle_exclusion_button = battlemod_button_ext:add_battle_order_button("pancake_idle_exclusion_button",
                                                                                           false,
                                                                                           "ui/templates/square_medium_button");
         self.pancake_idle_exclusion_button:SetImagePath("ui\\pancake_images\\icon_find_idle_disabled.png", 0);
 
         function self:set_exclusion_button_state(selection_has_exclusion, any_unit_is_selected)
-            if selection_has_exclusion then
-                self.pancake_idle_exclusion_button:SetImagePath("ui\\pancake_images\\icon_find_idle_disabled.png", 0);
-                --self.pancake_idle_exclusion_button:SetState("selected");
+            
+            if any_unit_is_selected then
+
+                if selection_has_exclusion then
+                    self.pancake_idle_exclusion_button:SetImagePath("ui\\pancake_images\\icon_find_idle_disabled.png", 0);
+                    self.pancake_idle_exclusion_button:SetState("active"); --self.pancake_idle_exclusion_button:SetState("selected");
+                else
+                    self.pancake_idle_exclusion_button:SetImagePath("ui\\pancake_images\\icon_find_idle_enabled.png", 0);
+                    self.pancake_idle_exclusion_button:SetState("active");
+                end;
             else
                 self.pancake_idle_exclusion_button:SetImagePath("ui\\pancake_images\\icon_find_idle_enabled.png", 0);
-                --self.pancake_idle_exclusion_button:SetState("active");
+                self.pancake_idle_exclusion_button:SetState("inactive");
             end;
         end;
 
@@ -1394,39 +1633,6 @@ function pancake:phase_complete()
     bm:pancake_idle_clear_listeners_for_selections();
 end;
 
-core:add_listener(
-    "pancake_idle_mark_listener",
-    "ShortcutTriggered",
-    function(context)
-        return context.string == "camera_bookmark_save9"; -- save9 appears in the game as Save10
-    end,
-    function()
-        local pancake_object = pancake;
-        pancake_object:set_should_find_idle_units(not pancake_object.is_marking_idle_units);
-    end,
-    true
-);
-
-core:add_listener(
-    "pancake_next_idle_listener",
-    "ShortcutTriggered",
-    function(context)
-        return context.string == "camera_bookmark_save10"; -- save10 appears in the game as Save11
-    end,
-    function()
-        local pancake_object = pancake;
-        --pancake_object:debug("In camera_bookmark_save10 for find_next_idle");
-        if not pancake_object.is_battle_complete then
-            if pancake_object.is_deployed then
-                pancake_object:select_next_idle(false);
-            else
-                pancake_object:show_popup_msg_if_ok("Next idle is not enabled until the battle has started.");
-            end;
-        end;
-    end,
-    true
-);
-
 --the currently selected units will either be all excluded or all included by this method
 --Note that if is_callback_context is false, the actual exclusion won't happen immediately in code until the callback
 --returns true  if the selected units will be all be excluded after the callback
@@ -1437,7 +1643,7 @@ function pancake:toggle_exclude_on_selected_units(is_callback_context)
     --self:debug("In toggle_exclude_on_selected_units");
 
     local uic_parent = find_uicomponent(core:get_ui_root(), "battle_orders", "cards_panel", "review_DY");
-    local selected_ui_ids = {}; --table of string ids
+    local selected_ui_ids = {}; --list of string ids
     
     --populate selected_ui_ids
 	if uic_parent then
@@ -1480,30 +1686,6 @@ function pancake:toggle_exclude_on_selected_units(is_callback_context)
     return change_all_to_be_excluded;
 end;
 
---Note that this listener is only added if the user has set this configuration option
---config.use_hotkey_to_exclude_unit could be set to true or to a string key indicating the hotkey
-local pancake_exclude_hotkey = "camera_bookmark_save11"; -- save11 appears in the game as Save12
-if config.use_hotkey_to_exclude_unit then
-
-    if is_string(config.use_hotkey_to_exclude_unit) and not config.use_hotkey_to_exclude_unit == "true" then
-        pancake_exclude_hotkey = config.use_hotkey_to_exclude_unit;
-    end;
-
-    core:add_listener(
-        "pancake_exclude_from_idle_listener",
-        "ShortcutTriggered",
-        function(context) return context.string == pancake_exclude_hotkey; end,
-        function()
-            local pancake_object = pancake;
-            --pancake_object:debug("Exclusion hotkey was pressed.");
-            if not pancake_object.is_battle_complete then
-                bm:callback(function() pancake_object:toggle_exclude_on_selected_units(true) end, 0, "pancake_toggle_exclude_selected");
-            end;
-        end,
-        true
-    );
-end;
-
 --We shouldn't need a listener for gifted units, since all non-ui pings are removed in the update function
 --core:add_listener(
 --    "pancake_units_gifted_listener",
@@ -1513,6 +1695,6 @@ end;
 --    true
 --);
 
-bm:register_phase_change_callback("Startup", function() pancake:phase_startup() end);
-bm:register_phase_change_callback("Deployed", function() pancake:phase_deployed() end);
-bm:register_phase_change_callback("Complete", function() pancake:phase_complete() end);
+bm:register_phase_change_callback("PrebattleWeather", function() pancake:phase_prebattle(); end);
+bm:register_phase_change_callback("Deployed", function() pancake:phase_deployed(); end);
+bm:register_phase_change_callback("Complete", function() pancake:phase_complete(); end);

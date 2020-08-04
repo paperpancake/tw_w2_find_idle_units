@@ -63,6 +63,18 @@ include_again_if_gates_break = false
 seconds_idle_before_marked = 1.8
 seconds_between_idle_checks = 0.6
 
+----------------------------------------------------------------------------------------------
+-- These options allow you to change the hotkeys this mod piggybacks on or to get rid of the
+-- piggybacking altogether
+-- You probably don't need to edit these unless you need them for another mod or you need
+-- a lot of camera bookmark hotkeys and wish this mod didn't use so many.
+-- Set these to have this function as described in mod's description ("Save Camera Bookmark 10" and 11)
+-- Set either or both of these to false to not it use at all
+-- Or you can set these to one of the allowed modding hotkeys (F2 to F4) like "script_shift_F2"
+
+hotkey_for_toggle_find_all_idle = true
+hotkey_for_next_idle_unit = true
+
 ]]
 
 local pancake_2020_05_update_text = 
@@ -105,6 +117,24 @@ seconds_between_idle_checks = 0.6
 
 ]]
 
+local pancake_2020_08_update_text =
+[[
+----------------------------------------------------------------------------------------------
+--        ******* New for 08/2020 *********
+----------------------------------------------------------------------------------------------
+
+-- These options allow you to change this mod's primary hotkeys or get rid of them altogether
+-- You probably don't need to edit these unless you need them for another mod or you need
+-- a lot of camera bookmark hotkeys and wish this mod didn't use so many.
+-- Set these to true to use the hotkeys in the mods description ("Save Camera Bookmark 10" and 11)
+-- Set either or both of these to false to not use it at all
+-- Or you can set these to one of the allowed modding hotkeys (F2 to F4) like "script_shift_F2"
+
+hotkey_for_toggle_find_all_idle = true
+hotkey_for_next_idle_unit = true
+
+]]
+
 local config_filename = "./mod_config/find_idle_units_config.txt";
 
 --@param a config table that reflects the current environmnet state (variables and their values) that are in the config file
@@ -124,7 +154,7 @@ local function pancake_update_config_file_if_needed(config)
         end;
     end;
 
-    --update for May 2020
+    --update for June 2020
     if config.seconds_idle_before_marked == nil and config.seconds_between_idle_checks == nil then
         local file, err_str = io.open(config_filename, "a");
         if file then
@@ -132,6 +162,20 @@ local function pancake_update_config_file_if_needed(config)
             file:write(pancake_2020_06_update_text);
             file:close();
             out("&&&& added the 06/2020 update to the end of "..tostring(config_filename));
+        else
+            out("&&&& Could not update the config file at "..tostring(config_filename));
+            out("&&&& "..tostring(err_str));
+        end;
+    end;
+
+    --update for August 2020
+    if config.hotkey_for_toggle_find_all_idle == nil and config.hotkey_for_next_idle_unit == nil then
+        local file, err_str = io.open(config_filename, "a");
+        if file then
+            file:write("");
+            file:write(pancake_2020_08_update_text);
+            file:close();
+            out("&&&& added the 08/2020 update to the end of "..tostring(config_filename));
         else
             out("&&&& Could not update the config file at "..tostring(config_filename));
             out("&&&& "..tostring(err_str));
