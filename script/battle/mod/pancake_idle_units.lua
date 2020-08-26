@@ -151,7 +151,7 @@ end;
 
 -------------------------------------------------------------------------------------------------------------------------------
 --- @section Optional Configuration
---- @desc The user can provide a text file containing variable assignments
+--- @desc The user can provide a text file containing variable assignments, or they can use Vandy's Mod Configuration Tool
 -------------------------------------------------------------------------------------------------------------------------------
 
 local config = nil;
@@ -199,8 +199,15 @@ local function try_to_get_MCT()
     
     local mct = nil;
 
-    if is_function(get_mct) then
-        mct = get_mct();
+    --mct_local_reference will be nil unitl the MctInitialized event
+    --we don't want to do anything with an uninitialized mct
+    if mct_local_reference then
+        if is_function(get_mct) then
+            mct = get_mct();
+            mct_local_reference = mct;
+        else
+            mct = mct_local_reference;
+        end;
     end;
     
     return mct;
@@ -216,6 +223,8 @@ local function create_config_table_with_defaults()
         no_ping_icon_for_next_unit = true, --changed to true in 05/2020 update
         seconds_idle_before_marked = 1.8,
         seconds_between_idle_checks = 0.6,
+
+        ping_image = "zzz",
 
         --This should save some users that might forget to put quotation marks around some strings like "script_F2"
         script_F2 = "script_F2",
@@ -350,8 +359,7 @@ local function try_loading_config_from_file()
     return config, config_log_msg;
 end;
 
---config_type is "mct", "file", or "original", or nil
---TODO: test this with and without the mct, and with and without the file
+--config_type is "mct", "file", or "original", or ni
 local function pancake_idle_load_config()
 
     local config, config_type, config_log_msg;
@@ -612,7 +620,7 @@ function pancake:ping_one_unit_temporarily(unit_key)
 
         if not mock_su_to_ping.uic_ping_marker then
             --this doesn't use the optional ping duration from add_ping_icon because we need more control of repeated pings
-            mock_su_to_ping:add_ping_icon();
+            mock_su_to_ping:pancake_add_ping_icon(config.idle_ping_image);
             bm:callback(ping_removal_function, ping_duration, ping_removal_name);
         else
             bm:remove_process(ping_removal_name);
@@ -636,14 +644,14 @@ function pancake:ping_unit_if_ok(unit_key, is_for_toggle)
             if not config.no_ping_icon_for_toggle then
 
                 --handle the case where there's a ping removal scheduled from a previous hotkey selection
-                --note that script_unit:add_ping_icon() doesn't check to see if a ping is already there
-                --if you call add_ping_icon when there is already one created, then you'll lose your reference to it
+                --note that script_unit:pancake_add_ping_icon() doesn't check to see if a ping is already there
+                --if you call pancake_add_ping_icon() when there is already one created, then you'll lose your reference to it
                 --and have no way to destroy it
                 if mock_su_to_ping.uic_ping_marker then
                     --this does nothing if the process isn't found, which is good
                     bm:remove_process(self:get_ping_removal_name(unit_key, mock_su_to_ping.name));
                 else
-                    mock_su_to_ping:add_ping_icon();
+                    mock_su_to_ping:pancake_add_ping_icon(config.idle_ping_image);
                 end;
 
             end;
@@ -1642,8 +1650,8 @@ function pancake:toggle_exclude_on_selected_units(is_callback_context)
 
     --self:debug("In toggle_exclude_on_selected_units");
 
-    local uic_parent = find_uicomponent(core:get_ui_root(), "battle_orders", "cards_panel", "review_DY");
     local selected_ui_ids = {}; --list of string ids
+    local uic_parent = find_uicomponent(core:get_ui_root(), "battle_orders", "cards_panel", "review_DY");
     
     --populate selected_ui_ids
 	if uic_parent then

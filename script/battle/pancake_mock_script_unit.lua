@@ -81,3 +81,50 @@ if need_function(pancake_create_mock_script_unit) then
         return mock_su;
     end;
 end;
+
+function script_unit:pancake_add_ping_icon(idle_ping_image)
+	
+	-- We create a ping icon that sits on top of unit id that is always preset for a unit. That way it will always stay at correct height over unit, its id and flag.
+	local unit_id_parent = find_uicomponent(core:get_ui_root(), "unit_id_holder");
+	if unit_id_parent then 
+		local unit_id = find_uicomponent(unit_id_parent, tostring(self.unit:unique_ui_id()));
+		if unit_id then
+			local script_ping_parent = find_uicomponent(unit_id, "script_ping_parent");
+			if script_ping_parent then
+				local uic_ping_marker = UIComponent(script_ping_parent:CreateComponent(self.name .. "_ping_icon", "ui/battle ui/unit_ping_indicator"));
+				uic_ping_marker:SetContextObject("CcoBattleUnit" .. self.unit:unique_ui_id());
+				self.uic_ping_marker = uic_ping_marker;
+				
+				-- Set icon
+				local icon_child = find_uicomponent(uic_ping_marker, "icon");
+                
+                icon_child:SetCanResizeWidth(true);
+                icon_child:SetCanResizeHeight(true);
+                icon_child:Resize(32, 32);
+                icon_child:SetDockOffset(0, 5);
+                
+                if icon_child then
+                    
+                    if idle_ping_image == "default" or not is_string(idle_ping_image) then
+
+                        icon_child:SetImagePath(effect.PingIconPath(8), 0); --8 is just the default icon_type
+
+                    else
+
+                        icon_child:SetImagePath("ui\\pancake_images\\icon_"..idle_ping_image.."_above_unit.png", 0);
+
+                        for i = 1, icon_child:NumImages() - 1 do
+                            icon_child:SetImagePath("ui\\pancake_images\\find_idle_transparent_pixel.png", i);
+                        end;
+                    end;    
+
+				end;
+                
+                local tmp_arrow = find_uicomponent(uic_ping_marker, "arrow");
+                if tmp_arrow then
+                    tmp_arrow:SetVisible(false);
+                end;
+			end;
+		end;
+	end;
+end;

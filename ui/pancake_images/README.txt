@@ -1,1 +1,1 @@
-This folder has dummy icons. The actual icons in the mod released on the Steam page are based on icons in the game that I don't think I have permission to distribute independently.
+I personally created icon_zzz_above_unit.png, so it is included here. The other icons in this folder are dummy icons. Many of the actual icons in the mod released on the Steam page are based on icons in the game that I don't think I have permission to distribute independently.

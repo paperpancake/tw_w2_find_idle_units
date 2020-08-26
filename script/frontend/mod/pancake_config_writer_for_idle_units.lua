@@ -28,6 +28,13 @@ no_ping_icon_for_toggle = false
 no_ping_icon_for_next_unit = true
 no_camera_pan_for_next_unit = false
 
+--------------------------------------------------------------------------------------------
+-- This option controls what type of ping this mod uses when it needs one.
+-- Set this to "zzz", "magnifying_glass", or "default"
+-- (yes, use quotes your choice; "default" uses the yellow circle with an eye inside)
+-- This does not control whether or not the ping will appear. Use the above options for that.
+
+idle_ping_image = "zzz"
 
 ---------------------------------------------------------------------------------------------
 -- The "Find All Idle Units" toggle is normally off at the beginning of a battle.
@@ -117,7 +124,7 @@ seconds_between_idle_checks = 0.6
 
 ]]
 
-local pancake_2020_08_update_text =
+local pancake_2020_08_04_update_text =
 [[
 ----------------------------------------------------------------------------------------------
 --        ******* New for 08/2020 *********
@@ -132,6 +139,20 @@ local pancake_2020_08_update_text =
 
 hotkey_for_toggle_find_all_idle = true
 hotkey_for_next_idle_unit = true
+
+]]
+
+local pancake_2020_08_18_update_text =
+[[
+----------------------------------------------------------------------------------------------
+--        ******* AND ANOTHER ONE (2nd update for 08/2020) *********
+--------------------------------------------------------------------------------------------
+
+-- This option controls what type of ping this mod uses when it needs one.
+-- Set this to "zzz", "magnifying_glass", or "default"
+-- (yes, use quotes your choice; "default" uses the yellow circle with an eye inside)
+
+idle_ping_image = "zzz"
 
 ]]
 
@@ -168,12 +189,12 @@ local function pancake_update_config_file_if_needed(config)
         end;
     end;
 
-    --update for August 2020
+    --first update for August 2020
     if config.hotkey_for_toggle_find_all_idle == nil and config.hotkey_for_next_idle_unit == nil then
         local file, err_str = io.open(config_filename, "a");
         if file then
             file:write("");
-            file:write(pancake_2020_08_update_text);
+            file:write(pancake_2020_08_04_update_text);
             file:close();
             out("&&&& added the 08/2020 update to the end of "..tostring(config_filename));
         else
@@ -181,6 +202,21 @@ local function pancake_update_config_file_if_needed(config)
             out("&&&& "..tostring(err_str));
         end;
     end;
+
+    --second update for August 2020
+    if config.idle_ping_image == nil then
+        local file, err_str = io.open(config_filename, "a");
+        if file then
+            file:write("");
+            file:write(pancake_2020_08_18_update_text);
+            file:close();
+            out("&&&& added the 08/2020 update to the end of "..tostring(config_filename));
+        else
+            out("&&&& Could not update the config file at "..tostring(config_filename));
+            out("&&&& "..tostring(err_str));
+        end;
+    end;
+    
 end;
 
 --check whether the file exists before calling this function

@@ -63,7 +63,6 @@ function pancake_dependency_group:set_all_dependent_enabled(should_enable)
     local should_lock = not should_enable;
     for k, v in next, self.dependent_options do
         v.option:set_uic_locked(should_lock);
-        -- v.option:set_uic_visibility(should_enable);
     end;
 end;
 
@@ -193,6 +192,11 @@ popup_msg_duration:slider_set_precision(1);
 popup_msg_duration:set_default_value(1.2);
 popup_msg_duration:slider_set_step_size(0.6, 1);
 
+local idle_ping_image = create_local_option("section_misc", "idle_ping_image", "dropdown");
+idle_ping_image:add_dropdown_value("zzz", "zzz", "", true);
+idle_ping_image:add_dropdown_value("magnifying_glass", "magnifying glass", "");
+idle_ping_image:add_dropdown_value("default", "yellow circle with eye", "");
+
 local pulse_toggle = create_local_option("section_misc", "pulse_toggle", "checkbox");
 pulse_toggle:set_default_value(true);
 
@@ -264,12 +268,6 @@ exclude_dependency_group:add_dependent_option(include_again_if_gates_break);
 --this does not affect option_which_config and needs to be mindful of pancake_dependency_group objects
 local function set_enabled_for_all_options(use_mct_settings)
     local should_lock = not use_mct_settings;
-
-    --this would be better in a loop, but since MCT sections are being actively developed, I figured listing each was safer
-    --this one should always stay visible: mct_mod:set_section_visibility("default", show_most_options);
-    --mct_mod:set_section_visibility("section_main_hotkeys", show_most_options);
-    --mct_mod:set_section_visibility("section_misc", show_most_options);
-    --mct_mod:set_section_visibility("section_exclude_include", show_most_options);
     
     --handle dependencies for option_which_config
     --This could use a pancake_dependency_group, but that would require adding all options as dependencies. Not worth it atm.
